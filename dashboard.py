@@ -1,7 +1,9 @@
 import json
 import threading
+from collections import deque
 
 import paho.mqtt.client as mqtt
+import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
 
 
@@ -11,6 +13,7 @@ TOPIC = "umf1/car01/telemetry/fast"
 
 telemetry = {
     "sequence": 0,
+    "timestamp_ms": 0,
     "throttle_percent": 0,
     "brake_bar": 0,
     "steering_degrees": 0,
@@ -18,6 +21,9 @@ telemetry = {
 }
 
 telemetry_lock = threading.Lock()
+
+time_history = deque(maxlen=100)
+speed_history = deque(maxlen=100)
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -35,7 +41,13 @@ def on_message(client, userdata, message):
         with telemetry_lock:
             telemetry.update(received_data)
 
-    except (json.JSONDecodeError, UnicodeDecodeError):
+            time_seconds = received_data["timestamp_ms"] / 1000
+            speed = received_data["speed_kmh"]
+
+            time_history.append(time_seconds)
+            speed_history.append(speed)
+
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
         print("Dashboard received an invalid message")
 
 
@@ -107,6 +119,8 @@ app.layout = html.Div(
 
         html.P(id="sequence-value"),
 
+        dcc.Graph(id="speed-graph"),
+
         dcc.Interval(
             id="dashboard-update",
             interval=100,
@@ -126,11 +140,32 @@ app.layout = html.Div(
     Output("steering-value", "children"),
     Output("speed-value", "children"),
     Output("sequence-value", "children"),
+    Output("speed-graph", "figure"),
     Input("dashboard-update", "n_intervals"),
 )
 def update_dashboard(_):
     with telemetry_lock:
         latest = telemetry.copy()
+        graph_times = list(time_history)
+        graph_speeds = list(speed_history)
+
+    speed_figure = go.Figure()
+
+    speed_figure.add_trace(
+        go.Scatter(
+            x=graph_times,
+            y=graph_speeds,
+            mode="lines",
+            name="Vehicle Speed",
+        )
+    )
+
+    speed_figure.update_layout(
+        title="Live Vehicle Speed",
+        xaxis_title="Time (seconds)",
+        yaxis_title="Speed (km/h)",
+        yaxis_range=[0, 100],
+    )
 
     return (
         f"{latest['throttle_percent']:.2f} %",
@@ -138,6 +173,7 @@ def update_dashboard(_):
         f"{latest['steering_degrees']:.2f}°",
         f"{latest['speed_kmh']:.2f} km/h",
         f"Latest packet: {latest['sequence']}",
+        speed_figure,
     )
 
 
