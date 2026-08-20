@@ -29,22 +29,27 @@ def generate_telemetry(sequence, elapsed_seconds):
     }
 
 
-print("Virtual STM32 started")
-print("Press Control + C to stop")
+def main():
+    print("Virtual STM32 started")
+    print("Press Control + C to stop")
 
-start_time = time.monotonic()
-sequence = 0
+    start_time = time.monotonic()
+    sequence = 0
 
-try:
-    while True:
-        elapsed = time.monotonic() - start_time
-        telemetry = generate_telemetry(sequence, elapsed)
+    try:
+        while True:
+            elapsed = time.monotonic() - start_time
+            telemetry = generate_telemetry(sequence, elapsed)
 
-        print(telemetry)
+            print(telemetry)
 
-        sequence += 1
-        time.sleep(UPDATE_INTERVAL_SECONDS)
+            sequence += 1
+            time.sleep(UPDATE_INTERVAL_SECONDS)
 
-except KeyboardInterrupt:
-    print()
-    print("Virtual STM32 stopped")
+    except KeyboardInterrupt:
+        print()
+        print("Virtual STM32 stopped")
+
+
+if __name__ == "__main__":
+    main()
