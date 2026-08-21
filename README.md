@@ -2,7 +2,14 @@
 
 This project simulates and develops the telemetry pipeline:
 
-STM32 → ESP32 → MQTT → PC Subscriber → Data Processing → Dashboard
+Simulated STM32
+→ binary UART packet
+→ simulated ESP32
+→ MQTT
+→ logging
+→ live dashboard
+→ GPS and lap timing
+→ export
 
 ## Requirements
 - Python 3
