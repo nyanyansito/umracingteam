@@ -4,6 +4,10 @@ import time
 import paho.mqtt.client as mqtt
 
 from stm32_simulator import generate_telemetry
+from telemetry_packet import (
+    decode_fast_telemetry,
+    encode_fast_telemetry,
+)
 
 
 BROKER = "localhost"
@@ -25,7 +29,7 @@ client.connect(BROKER, PORT)
 client.loop_start()
 
 print("Virtual ESP32 connected")
-print("Publishing simulated STM32 data")
+print("Receiving simulated binary UART packets")
 print("Press Control + C to stop")
 
 start_time = time.monotonic()
@@ -35,20 +39,26 @@ try:
     while True:
         elapsed = time.monotonic() - start_time
 
-        # Pretend this data was received from the STM32 through UART.
-        telemetry = generate_telemetry(sequence, elapsed)
+        stm32_telemetry = generate_telemetry(sequence, elapsed)
 
-        message = json.dumps(telemetry)
-        client.publish(TOPIC, message)
+        # Simulate the binary packet sent through UART.
+        uart_packet = encode_fast_telemetry(stm32_telemetry)
+
+        # Simulate the ESP32 validating and decoding the UART packet.
+        decoded_telemetry = decode_fast_telemetry(uart_packet)
+
+        mqtt_message = json.dumps(decoded_telemetry)
+        client.publish(TOPIC, mqtt_message)
 
         print(
-            f"Published packet {sequence}: "
-            f"throttle={telemetry['throttle_percent']}%, "
-            f"brake={telemetry['brake_bar']} bar, "
-            f"speed={telemetry['speed_kmh']} km/h"
+            f"Packet {sequence}: "
+            f"UART={len(uart_packet)} bytes, "
+            f"throttle={decoded_telemetry['throttle_percent']}%, "
+            f"brake={decoded_telemetry['brake_bar']} bar, "
+            f"speed={decoded_telemetry['speed_kmh']} km/h"
         )
 
-        sequence += 1
+        sequence = (sequence + 1) % 65536
         time.sleep(UPDATE_INTERVAL_SECONDS)
 
 except KeyboardInterrupt:
