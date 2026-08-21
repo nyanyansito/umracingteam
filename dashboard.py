@@ -5,6 +5,7 @@ from collections import deque
 import paho.mqtt.client as mqtt
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
+from plotly.subplots import make_subplots
 
 
 BROKER = "localhost"
@@ -23,6 +24,9 @@ telemetry = {
 telemetry_lock = threading.Lock()
 
 time_history = deque(maxlen=100)
+throttle_history = deque(maxlen=100)
+brake_history = deque(maxlen=100)
+steering_history = deque(maxlen=100)
 speed_history = deque(maxlen=100)
 
 
@@ -36,16 +40,28 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 def on_message(client, userdata, message):
     try:
-        received_data = json.loads(message.payload.decode("utf-8"))
+        received_data = json.loads(
+            message.payload.decode("utf-8")
+        )
 
         with telemetry_lock:
             telemetry.update(received_data)
 
-            time_seconds = received_data["timestamp_ms"] / 1000
-            speed = received_data["speed_kmh"]
-
-            time_history.append(time_seconds)
-            speed_history.append(speed)
+            time_history.append(
+                received_data["timestamp_ms"] / 1000
+            )
+            throttle_history.append(
+                received_data["throttle_percent"]
+            )
+            brake_history.append(
+                received_data["brake_bar"]
+            )
+            steering_history.append(
+                received_data["steering_degrees"]
+            )
+            speed_history.append(
+                received_data["speed_kmh"]
+            )
 
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
         print("Dashboard received an invalid message")
@@ -119,7 +135,7 @@ app.layout = html.Div(
 
         html.P(id="sequence-value"),
 
-        dcc.Graph(id="speed-graph"),
+        dcc.Graph(id="telemetry-graphs"),
 
         dcc.Interval(
             id="dashboard-update",
@@ -140,31 +156,114 @@ app.layout = html.Div(
     Output("steering-value", "children"),
     Output("speed-value", "children"),
     Output("sequence-value", "children"),
-    Output("speed-graph", "figure"),
+    Output("telemetry-graphs", "figure"),
     Input("dashboard-update", "n_intervals"),
 )
 def update_dashboard(_):
     with telemetry_lock:
         latest = telemetry.copy()
+
         graph_times = list(time_history)
-        graph_speeds = list(speed_history)
+        graph_throttle = list(throttle_history)
+        graph_brake = list(brake_history)
+        graph_steering = list(steering_history)
+        graph_speed = list(speed_history)
 
-    speed_figure = go.Figure()
-
-    speed_figure.add_trace(
-        go.Scatter(
-            x=graph_times,
-            y=graph_speeds,
-            mode="lines",
-            name="Vehicle Speed",
-        )
+    figure = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        subplot_titles=(
+            "Throttle Position",
+            "Brake Pressure",
+            "Steering Angle",
+            "Vehicle Speed",
+        ),
     )
 
-    speed_figure.update_layout(
-        title="Live Vehicle Speed",
-        xaxis_title="Time (seconds)",
-        yaxis_title="Speed (km/h)",
-        yaxis_range=[0, 100],
+    figure.add_trace(
+        go.Scatter(
+            x=graph_times,
+            y=graph_throttle,
+            mode="lines",
+            name="Throttle",
+        ),
+        row=1,
+        col=1,
+    )
+
+    figure.add_trace(
+        go.Scatter(
+            x=graph_times,
+            y=graph_brake,
+            mode="lines",
+            name="Brake",
+        ),
+        row=2,
+        col=1,
+    )
+
+    figure.add_trace(
+        go.Scatter(
+            x=graph_times,
+            y=graph_steering,
+            mode="lines",
+            name="Steering",
+        ),
+        row=3,
+        col=1,
+    )
+
+    figure.add_trace(
+        go.Scatter(
+            x=graph_times,
+            y=graph_speed,
+            mode="lines",
+            name="Speed",
+        ),
+        row=4,
+        col=1,
+    )
+
+    figure.update_yaxes(
+        title_text="Throttle (%)",
+        range=[0, 100],
+        row=1,
+        col=1,
+    )
+
+    figure.update_yaxes(
+        title_text="Brake (bar)",
+        range=[0, 100],
+        row=2,
+        col=1,
+    )
+
+    figure.update_yaxes(
+        title_text="Steering (°)",
+        range=[-50, 50],
+        row=3,
+        col=1,
+    )
+
+    figure.update_yaxes(
+        title_text="Speed (km/h)",
+        range=[0, 100],
+        row=4,
+        col=1,
+    )
+
+    figure.update_xaxes(
+        title_text="Time (seconds)",
+        row=4,
+        col=1,
+    )
+
+    figure.update_layout(
+        height=1000,
+        showlegend=False,
+        title="Live Telemetry History",
     )
 
     return (
@@ -173,7 +272,7 @@ def update_dashboard(_):
         f"{latest['steering_degrees']:.2f}°",
         f"{latest['speed_kmh']:.2f} km/h",
         f"Latest packet: {latest['sequence']}",
-        speed_figure,
+        figure,
     )
 
 
