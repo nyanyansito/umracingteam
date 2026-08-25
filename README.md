@@ -20,7 +20,7 @@ Simulated STM32
 
 ## How to Run
 1. Start Mosquitto broker
-2. Run stm32_simulator.py
-3. Run esp32_gateway_sim.py
-4. Run telemetry_subscriber.py
+2. Run stm32_link_server.py
+3. Run esp32_simulator.py
+4. Run mqtt_subscriber.py
 5. Run dashboard.py
