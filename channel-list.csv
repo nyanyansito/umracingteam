@@ -1,5 +1,24 @@
-channel_id,channel_name,description,unit,data_type,sample_rate_hz,telemetry_rate_hz
-1,throttle_position,Driver throttle pedal position,percent,uint16,1000,100
-2,brake_pressure,Hydraulic brake pressure,bar,uint16,1000,100
-3,steering_angle,Steering wheel angle,degrees,int16,200,100
-4,vehicle_speed,Calculated vehicle speed,km/h,uint16,100,100
+channel_id,channel_name,description,unit,data_type,sample_rate_hz,telemetry_rate_hz,min_value,max_value,mqtt_topic,status
+1,throttle_position,Driver throttle pedal position,percent,uint16,1000,100,0,100,umf1/car01/telemetry/fast,implemented
+2,brake_pressure,Hydraulic brake pressure,bar,uint16,1000,100,0,100,umf1/car01/telemetry/fast,implemented
+3,steering_angle,Steering wheel angle,degrees,int16,200,100,-45,45,umf1/car01/telemetry/fast,implemented
+4,vehicle_speed,Calculated vehicle speed,km/h,uint16,100,100,0,120,umf1/car01/telemetry/fast,implemented
+5,latitude,GPS latitude,decimal_degrees,float64,10,10,-90,90,umf1/car01/telemetry/gps,implemented
+6,longitude,GPS longitude,decimal_degrees,float64,10,10,-180,180,umf1/car01/telemetry/gps,implemented
+7,gps_speed,GPS-derived ground speed,km/h,float32,10,10,0,120,umf1/car01/telemetry/gps,implemented
+8,gps_valid,GPS fix validity flag,boolean,bool,10,10,0,1,umf1/car01/telemetry/gps,implemented
+9,timestamp_ms,Milliseconds since STM32 start,milliseconds,uint32,,per_packet,0,4294967295,umf1/car01/telemetry/fast;gps,implemented
+10,sequence,Packet sequence number,count,uint16,,per_packet,0,65535,umf1/car01/telemetry/fast;gps,implemented
+11,lap_number,Completed lap count,count,uint16,,on_lap_completion,0,999,umf1/car01/telemetry/lap,implemented
+12,lap_time,Time to complete the lap,seconds,float64,,on_lap_completion,0,600,umf1/car01/telemetry/lap,implemented
+13,online,Gateway link-up flag,boolean,bool,,1,0,1,umf1/car01/status,implemented
+14,packet_count,Total valid packets forwarded,count,uint32,,1,0,,umf1/car01/gateway/status,implemented
+15,decode_error_count,Packets rejected for CRC/format errors,count,uint32,,1,0,,umf1/car01/gateway/status,implemented
+16,dropped_count,Packets decoded but dropped (no MQTT link),count,uint32,,1,0,,umf1/car01/gateway/status,implemented
+17,wheel_speed_fl,Front-left wheel speed,km/h,uint16,,100,0,120,TBD,planned
+18,wheel_speed_fr,Front-right wheel speed,km/h,uint16,,100,0,120,TBD,planned
+19,wheel_speed_rl,Rear-left wheel speed,km/h,uint16,,100,0,120,TBD,planned
+20,wheel_speed_rr,Rear-right wheel speed,km/h,uint16,,100,0,120,TBD,planned
+21,engine_rpm,Engine/motor rotational speed,rpm,uint16,,100,0,15000,TBD,planned
+22,longitudinal_accel,Fore-aft acceleration,g,int16,,100,-3,3,TBD,planned
+23,lateral_accel,Side-to-side acceleration,g,int16,,100,-3,3,TBD,planned
