@@ -15,7 +15,7 @@ speed_kmh). So this module's job is NOT to redo that scaling -- it is to:
      future channel that arrives as a raw count, e.g. wheel speeds or
      RPM, has a ready-made conversion path).
   2. Subscribe to every "implemented" raw telemetry topic, validate each
-     field against the min/max range defined in channel-list.csv, and
+     field against the min/max range defined in channellist.csv, and
      republish a standardized "processed" message.
   3. Flag out-of-range values without discarding or clamping them --
      per team decision, the pipeline should never silently hide a bad
@@ -23,16 +23,16 @@ speed_kmh). So this module's job is NOT to redo that scaling -- it is to:
 
 Range handling policy: FLAG, DO NOT MODIFY.
     If a value falls outside [min_value, max_value] from
-    channel-list.csv, it is marked "out_of_range" in the processed
+    channellist.csv, it is marked "out_of_range" in the processed
     message but the value itself is passed through unchanged. This
     preserves raw-vs-processed traceability for the Week 3 accuracy
     report -- an out-of-range flag should never be the reason a value
     looks "wrong" when compared back to the source.
 
-Reading channel-list.csv at runtime
+Reading channellist.csv at runtime
 ------------------------------------
 CHANNEL_SPECS is no longer typed in by hand. On import, this module
-opens channel-list.csv (expected in the same folder as this file --
+opens channellist.csv (expected in the same folder as this file --
 i.e. the repo root) and reads min_value/max_value/unit straight from
 it. Editing the CSV and re-running the pipeline is now enough to
 change validation ranges; nothing here needs to be touched for that.
@@ -49,7 +49,7 @@ code receives" to "what the CSV calls it". If a teammate renames a
 channel_name in the CSV, or a wire field name changes in a simulator,
 update this mapping to match.
 
-Only channels marked status=implemented in channel-list.csv are
+Only channels marked status=implemented in channellist.csv are
 loaded, because those are the only ones any simulator or gateway
 script actually publishes. Rows marked status=planned (wheel speeds,
 RPM, longitudinal/lateral acceleration) are skipped automatically --
@@ -57,6 +57,16 @@ nothing publishes them yet, so there is nothing on the wire to
 validate. Once a simulator starts publishing one, add its wire field
 name to WIRE_FIELD_TO_CSV_CHANNEL_NAME (and to TOPIC_FIELDS below) and
 it will start being picked up from the CSV with no other changes.
+
+Status topic
+------------
+esp32_simulator.py publishes gateway link-up state (online) AND
+gateway counters (packet_count, decode_error_count, dropped_count)
+together, in a single JSON message, to one topic: umf1/car01/status.
+There is no separate "gateway/status" topic published anywhere in the
+pipeline -- channellist.csv's mqtt_topic column for those rows was
+corrected to reflect this. TOPIC_FIELDS below lists all four fields
+under that one topic to match.
 """
 
 import csv
@@ -74,7 +84,6 @@ FAST_TOPIC = "umf1/car01/telemetry/fast"
 GPS_TOPIC = "umf1/car01/telemetry/gps"
 LAP_TOPIC = "umf1/car01/telemetry/lap"
 STATUS_TOPIC = "umf1/car01/status"
-GATEWAY_STATUS_TOPIC = "umf1/car01/gateway/status"
 
 # Each source topic gets its own processed topic (source topic +
 # "/processed"), rather than one shared topic for everything.
@@ -92,15 +101,15 @@ PROCESSED_TOPIC_SUFFIX = "/processed"
 RANGE_OK = "ok"
 RANGE_OUT_OF_RANGE = "out_of_range"
 
-# channel-list.csv is expected to sit next to this file, in the repo
+# channellist.csv is expected to sit next to this file, in the repo
 # root, alongside dashboard.py / esp32_simulator.py / etc.
-CSV_FILENAME = "channel-list.csv"
+CSV_FILENAME = "channellist.csv"
 CSV_PATH = Path(__file__).resolve().parent / CSV_FILENAME
 
 
 # ---------------------------------------------------------------------
-# Wire field name -> channel-list.csv channel_name
-# (see "Reading channel-list.csv at runtime" above for why this exists)
+# Wire field name -> channellist.csv channel_name
+# (see "Reading channellist.csv at runtime" above for why this exists)
 # ---------------------------------------------------------------------
 WIRE_FIELD_TO_CSV_CHANNEL_NAME = {
     "throttle_percent": "throttle_position",
@@ -120,7 +129,7 @@ WIRE_FIELD_TO_CSV_CHANNEL_NAME = {
 }
 
 # Raw-count -> engineering-unit scale factors, from telemetry_packet.py.
-# Not something channel-list.csv tracks -- only the four fast-telemetry
+# Not something channellist.csv tracks -- only the four fast-telemetry
 # fields still travel as fixed-point counts over UART before the ESP32
 # converts them, so only they need a scale factor here.
 SCALE_FACTORS = {
@@ -134,23 +143,31 @@ SCALE_FACTORS = {
 # timestamp_ms and sequence (csv rows 9-10) are treated as packet
 # metadata rather than validated channels -- every payload carries
 # them, but they describe the packet, not a sensor reading.
+#
+# online / packet_count / decode_error_count / dropped_count are all
+# listed under STATUS_TOPIC because esp32_simulator.py publishes them
+# together in one message to that one topic (see module docstring).
 TOPIC_FIELDS = {
     FAST_TOPIC: ["throttle_percent", "brake_bar", "steering_degrees", "speed_kmh"],
     GPS_TOPIC: ["latitude", "longitude", "gps_speed_kmh", "gps_valid"],
     LAP_TOPIC: ["lap_number", "lap_time_seconds"],
-    STATUS_TOPIC: ["online"],
-    GATEWAY_STATUS_TOPIC: ["packet_count", "decode_error_count", "dropped_count"],
+    STATUS_TOPIC: [
+        "online",
+        "packet_count",
+        "decode_error_count",
+        "dropped_count",
+    ],
 }
 
 
 # ---------------------------------------------------------------------
-# Loading channel specs from channel-list.csv
+# Loading channel specs from channellist.csv
 # ---------------------------------------------------------------------
 
 def _parse_number(text):
     """Convert a CSV cell to int/float, or None if it's blank.
 
-    channel-list.csv leaves max_value blank for unbounded counters
+    channellist.csv leaves max_value blank for unbounded counters
     (packet_count, decode_error_count, dropped_count) -- blank must
     become None, not an error or a zero.
     """
@@ -163,7 +180,7 @@ def _parse_number(text):
 
 
 def load_channel_rows(csv_path=CSV_PATH):
-    """Read channel-list.csv into a dict keyed by channel_name."""
+    """Read channellist.csv into a dict keyed by channel_name."""
     rows_by_channel_name = {}
 
     with open(csv_path, newline="", encoding="utf-8") as csv_file:
@@ -183,7 +200,7 @@ def load_channel_rows(csv_path=CSV_PATH):
 
 def build_channel_specs(csv_path=CSV_PATH):
     """Build CHANNEL_SPECS (wire field name -> spec) directly from
-    channel-list.csv. This is what makes CSV edits take effect without
+    channellist.csv. This is what makes CSV edits take effect without
     any code change: min_value/max_value/unit always come straight
     from the file on disk at import time.
 
@@ -202,7 +219,7 @@ def build_channel_specs(csv_path=CSV_PATH):
                 f"channel_name '{csv_channel_name}' (expected for wire "
                 f"field '{wire_field}') was not found in {csv_path}. "
                 f"Check that WIRE_FIELD_TO_CSV_CHANNEL_NAME still matches "
-                f"channel-list.csv."
+                f"channellist.csv."
             )
 
         if row["status"] != "implemented":
@@ -225,7 +242,7 @@ try:
 except FileNotFoundError:
     raise FileNotFoundError(
         f"Could not find {CSV_FILENAME} at {CSV_PATH}. "
-        f"data_processing.py expects channel-list.csv in the same "
+        f"data_processing.py expects channellist.csv in the same "
         f"folder as this script (the repo root)."
     )
 
@@ -259,7 +276,7 @@ def convert_raw_to_engineering(raw_value, scale_factor):
 def validate_range(value, min_value, max_value):
     """Return True if value falls within [min_value, max_value].
 
-    Either bound may be None (channel-list.csv leaves max_value blank
+    Either bound may be None (channellist.csv leaves max_value blank
     for unbounded counters like packet_count) -- a None bound is
     treated as "no limit on that side" rather than failing the check.
     """

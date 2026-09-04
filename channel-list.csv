@@ -12,9 +12,9 @@ channel_id,channel_name,description,unit,data_type,sample_rate_hz,telemetry_rate
 11,lap_number,Completed lap count,count,uint16,,on_lap_completion,0,999,umf1/car01/telemetry/lap,implemented
 12,lap_time,Time to complete the lap,seconds,float64,,on_lap_completion,0,600,umf1/car01/telemetry/lap,implemented
 13,online,Gateway link-up flag,boolean,bool,,1,0,1,umf1/car01/status,implemented
-14,packet_count,Total valid packets forwarded,count,uint32,,1,0,,umf1/car01/gateway/status,implemented
-15,decode_error_count,Packets rejected for CRC/format errors,count,uint32,,1,0,,umf1/car01/gateway/status,implemented
-16,dropped_count,Packets decoded but dropped (no MQTT link),count,uint32,,1,0,,umf1/car01/gateway/status,implemented
+14,packet_count,Total valid packets forwarded,count,uint32,,1,0,,umf1/car01/status,implemented
+15,decode_error_count,Packets rejected for CRC/format errors,count,uint32,,1,0,,umf1/car01/status,implemented
+16,dropped_count,Packets decoded but dropped (no MQTT link),count,uint32,,1,0,,umf1/car01/status,implemented
 17,wheel_speed_fl,Front-left wheel speed,km/h,uint16,,100,0,120,TBD,planned
 18,wheel_speed_fr,Front-right wheel speed,km/h,uint16,,100,0,120,TBD,planned
 19,wheel_speed_rl,Rear-left wheel speed,km/h,uint16,,100,0,120,TBD,planned
