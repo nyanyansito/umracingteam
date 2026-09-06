@@ -55,10 +55,11 @@ Example message:
 
 ```json
 {
+  "sequence": 152,
   "timestamp_ms": 15200,
   "latitude": 3.1215,
   "longitude": 101.6532,
-  "speed_kmh": 63.4,
+  "gps_speed_kmh": 63.4,
   "gps_valid": true
 }
 ```
