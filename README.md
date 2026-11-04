@@ -116,6 +116,15 @@ and delta against the current session best. All row deltas update when a new
 best is set. A session-best row and BEST badge identify the fastest lap.
 The session top-speed card includes valid out-lap samples as well.
 
+The track trace shows throttle in green, braking in red (takes priority when
+both pedals are applied), and coasting in grey. Dark sections have no synchronized
+input data. Current-lap colours overlay the best complete lap. Simulator GPS
+messages include throttle and brake sampled at that exact position; the map does
+not match independently started fast-telemetry timestamps to GPS. Hardware should
+likewise publish synchronized `throttle_percent` and `brake_bar` with each GPS fix
+to enable these colours. Brake over 1 bar counts as braking; throttle over 5 percent
+counts as throttle when braking is inactive.
+
 Lap calculations run in the dashboard using the same `LapTimer` implementation
 as the standalone lap publisher; the dashboard does not need the standalone
 publisher to display lap timing. It must receive live GPS messages and observe
@@ -146,6 +155,14 @@ and 2 Hz for sensor histories, independently of data reception. The simulators
 use a paced virtual clock: host scheduling pauses freeze simulated time instead
 of teleporting the car forward or emitting a catch-up flood of packets. On a slow
 machine simulated lap duration can therefore exceed its nominal wall-clock time.
+
+The main lap clock and current lap's table time animate locally in the browser
+using requestAnimationFrame. A lightweight anchor updates independently at 10 Hz,
+with interpolation limited to 150 ms beyond the latest GPS time. This removes
+visible tenth-second steps without redrawing charts at animation speed. Millisecond
+display digits are an estimate between fixes, not millisecond measurement accuracy.
+If updates stop, interpolation is capped and the timer freezes. Completed lap
+results always use the source timestamps and finish-crossing interpolation.
 
 The default finish line is for the simulator: configure `lap_timer.py` for the
 actual circuit. The delta is a GPS estimate, not a transponder timing result.

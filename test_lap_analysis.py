@@ -127,7 +127,7 @@ class LapDashboardTests(unittest.TestCase):
         analysis = LapAnalysis(timer=circle_timer())
         with patch.object(dashboard, "lap_analysis", analysis), patch("time.monotonic", return_value=0):
             cards, status, track, delta, history = dashboard.update_lap_dashboard(0)
-            self.assertEqual(len(cards), 6)
+            self.assertEqual(len(cards), 5)
             self.assertIn("unavailable", status)
         drive(analysis, 20, 100)
         with patch.object(dashboard, "lap_analysis", analysis), patch("time.monotonic", return_value=100):

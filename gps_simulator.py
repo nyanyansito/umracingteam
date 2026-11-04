@@ -24,6 +24,8 @@ def generate_gps(sequence, elapsed_seconds):
         "gps_speed_kmh": sample["speed_kmh"],
         "gps_valid": True,
         "track_id": "red_bull_ring",
+        "throttle_percent": sample["throttle_percent"],
+        "brake_bar": sample["brake_bar"],
     }
 
 

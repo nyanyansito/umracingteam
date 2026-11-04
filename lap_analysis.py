@@ -30,6 +30,9 @@ class LapAnalysis:
         self.completed_count = 0
         self.best_top_speed = None
         self.track_id = None
+        self.current_inputs = []
+        self.reference_inputs = []
+        self.approach_inputs = deque(maxlen=1000)
 
     def xy(self, position):
         lon, lat = position
@@ -39,7 +42,9 @@ class LapAnalysis:
     def interrupt(self):
         self.timer.reset_continuity()
         self.current = []
+        self.current_inputs = []
         self.approach.clear()
+        self.approach_inputs.clear()
         self.delta_trace.clear()
         self.delta = None
         self.progress = 0.0
@@ -57,6 +62,7 @@ class LapAnalysis:
             if (isinstance(session, str) and session != self.session_id) or reboot:
                 self.interrupt()
                 self.reference = []
+                self.reference_inputs = []
                 self.reference_distances = []
                 self.reference_time = self.reference_lap = None
                 self.history.clear()
@@ -70,6 +76,7 @@ class LapAnalysis:
             self.interrupt()
             return
         point = self.xy(self.timer.previous_position)
+        mode = input_mode(gps)
         self.track_id = gps.get("track_id")
         speed = gps.get("gps_speed_kmh")
         speed = speed if is_number(speed) and speed >= 0 else None
@@ -78,10 +85,12 @@ class LapAnalysis:
         self.last_receive = self.timer.previous_receive_time
         if self.timer.lap_start_ms is None:
             self.current = []
+            self.current_inputs = []
             self.delta_trace.clear()
             self.delta = None
             self.progress = 0.0
             self.approach.append(point)
+            self.approach_inputs.append(mode)
             return
         crossing = self.timer.crossing
         if crossing:
@@ -102,12 +111,15 @@ class LapAnalysis:
                             distance += math.hypot(x - self.reference[-1][0], y - self.reference[-1][1])
                         self.reference.append((x, y, seconds, distance))
                     self.reference_time = duration
+                    self.reference_inputs = self.current_inputs + [mode]
                     self.reference_distances = [p[3] for p in self.reference]
                     self.reference_lap = lap["lap_number"]
                     self.best_top_speed = self.lap_top_speed
             self.current_start_ms = crossing["elapsed_ms"]
             self.current = [(boundary[0], boundary[1], 0.0)]
+            self.current_inputs = [mode]
             self.approach.clear()
+            self.approach_inputs.clear()
             self.progress = 0.0
             self.delta_trace.clear()
             self.delta = None
@@ -118,6 +130,7 @@ class LapAnalysis:
         if self.current and elapsed <= self.current[-1][2]:
             return  # Duplicate source timestamps do not extend a lap trace.
         self.current.append((*point, elapsed))
+        self.current_inputs.append(mode)
         if len(self.current) > 10000 or elapsed > 600:
             self.interrupt()
             return
@@ -166,6 +179,8 @@ class LapAnalysis:
             "delta": self.delta if fresh else None,
             "current": list(self.current) if self.current else list(self.approach),
             "reference": list(self.reference), "history": list(self.history),
+            "current_inputs": list(self.current_inputs) if self.current else list(self.approach_inputs),
+            "reference_inputs": list(self.reference_inputs),
             "delta_trace": list(self.delta_trace),
             "lap_top_speed": self.lap_top_speed,
             "session_top_speed": self.session_top_speed,
@@ -173,3 +188,22 @@ class LapAnalysis:
             "completed_count": self.completed_count,
             "track_outline": [self.xy(p) for p in COORDINATES] if self.track_id == "red_bull_ring" else [],
         }
+
+    def clock_state(self, now=None):
+        """Small snapshot for the browser clock, without copying chart arrays."""
+        now = time.monotonic() if now is None else now
+        age = None if self.last_receive is None else max(0, now - self.last_receive)
+        return {
+            "elapsed": self.current[-1][2] if self.current else None,
+            "age": age,
+            "running": bool(self.current) and age is not None and age <= self.timer.maximum_gap_seconds,
+            "lap_key": f"{self.session_id}:{getattr(self, 'current_start_ms', None)}:{self.timer.lap_number}",
+            "max_extrapolation": .15,
+        }
+
+
+def input_mode(sample):
+    throttle, brake = sample.get("throttle_percent"), sample.get("brake_bar")
+    if not is_number(throttle) or not 0 <= throttle <= 100 or not is_number(brake) or not 0 <= brake <= 100:
+        return "unknown"
+    return "brake" if brake > 1 else "throttle" if throttle > 5 else "coast"

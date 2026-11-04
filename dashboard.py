@@ -4,7 +4,7 @@ from collections import deque
 
 import paho.mqtt.client as mqtt
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, dcc, html
+from dash import Dash, Input, Output, dcc, html, ClientsideFunction
 from plotly.subplots import make_subplots
 
 # ADDED: keeps out-of-range warnings visible for a few seconds
@@ -220,7 +220,15 @@ app.layout = html.Div(
     [
         html.P("UM RACING  /  CAR 01", style={"letterSpacing": "3px", "color": "#94a3b8"}),
         html.H1("Pit Wall · Live telemetry"),
-        html.Div(id="lap-metrics", style={"display": "flex", "flexWrap": "wrap", "gap": "12px"}),
+        html.Div([
+            html.Div([html.Small("LAP TIME · LIVE"),
+                      html.Div("—", id="lap-live-clock", **{"data-lap-clock": "true"},
+                               style={"fontSize": "36px", "fontWeight": "bold", "fontVariantNumeric": "tabular-nums"})],
+                     style={"padding": "20px", "background": "#172033", "borderRadius": "12px", "flex": "1 1 180px"}),
+            html.Div(id="lap-metrics", style={"display": "contents"}),
+        ], style={"display": "flex", "flexWrap": "wrap", "gap": "12px"}),
+        dcc.Store(id="lap-clock-state"),
+        dcc.Store(id="lap-clock-ack"),
         html.P(id="lap-status", style={"color": "#94a3b8"}),
         html.Div([
             dcc.Graph(id="track-trace", style={"flex": "2 1 480px"}),
@@ -253,6 +261,7 @@ app.layout = html.Div(
             n_intervals=0,
         ),
         dcc.Interval(id="lap-update", interval=250, n_intervals=0),
+        dcc.Interval(id="clock-update", interval=100, n_intervals=0),
     ],
     style={
         "fontFamily": "Arial",
@@ -279,12 +288,24 @@ def lap_figures(state):
         figure.add_trace(go.Scatter(x=[p[0] for p in outline], y=[p[1] for p in outline],
                                    mode="lines", name="Red Bull Ring", line={"color": "#334155", "width": 9}))
     reference, current = state["reference"], state["current"]
-    if reference:
-        figure.add_trace(go.Scatter(x=[p[0] for p in reference], y=[p[1] for p in reference],
-                                   mode="lines", name="Best lap", line={"color": "#64748b", "width": 5}))
+    colors = {"throttle": ("Throttle", "#22c55e"), "brake": ("Braking", "#ef4444"),
+              "coast": ("Coasting", "#a3a3a3"), "unknown": ("No input data", "#475569")}
+    seen = set()
+    for points, modes, width in ((reference, state.get("reference_inputs", []), 4),
+                                  (current, state.get("current_inputs", []), 6)):
+        for mode, (name, color) in colors.items():
+            xs, ys = [], []
+            for i in range(1, len(points)):
+                segment_mode = modes[i - 1] if i - 1 < len(modes) else "unknown"
+                if segment_mode == mode:
+                    xs.extend((points[i - 1][0], points[i][0], None))
+                    ys.extend((points[i - 1][1], points[i][1], None))
+            if xs:
+                figure.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name, legendgroup=mode,
+                                           showlegend=mode not in seen, line={"color": color, "width": width},
+                                           connectgaps=False, hovertemplate=name + "<extra></extra>"))
+                seen.add(mode)
     if current:
-        figure.add_trace(go.Scatter(x=[p[0] for p in current], y=[p[1] for p in current],
-                                   mode="lines", name="Current trace", line={"color": "#38bdf8", "width": 3}))
         figure.add_trace(go.Scatter(x=[current[-1][0]], y=[current[-1][1]], mode="markers",
                                    name="Car" if state["fresh"] else "Last position",
                                    marker={"color": "#34d399" if state["fresh"] else "#94a3b8", "size": 12}))
@@ -312,7 +333,7 @@ def update_lap_dashboard(_):
         state = lap_analysis.snapshot()
     delta = state["delta"]
     metrics = [("CURRENT LAP", str(state["lap_number"] or "—")),
-               ("ELAPSED", lap_time(state["elapsed"])), ("LAST LAP", lap_time(state["last"])),
+               ("LAST LAP", lap_time(state["last"])),
                ("BEST LAP", lap_time(state["best"])),
                ("LIVE DELTA", "—" if delta is None else f"{delta:+.3f} s"),
                ("SESSION TOP SPEED", speed_text(state["session_top_speed"]) + " km/h")]
@@ -336,6 +357,16 @@ def update_lap_dashboard(_):
     return cards, status, track, delta_figure, history
 
 
+@app.callback(Output("lap-clock-state", "data"), Input("clock-update", "n_intervals"))
+def update_lap_clock(_):
+    with telemetry_lock:
+        return lap_analysis.clock_state()
+
+
+app.clientside_callback(ClientsideFunction(namespace="telemetryClock", function_name="update"),
+                        Output("lap-clock-ack", "data"), Input("lap-clock-state", "data"))
+
+
 def speed_text(value):
     return "—" if value is None else f"{value:.0f}"
 
@@ -347,7 +378,7 @@ def lap_table(state):
         color = "#4ade80" if best or (difference is not None and difference <= .1) else "#fbbf24" if difference is not None and difference < 1 else "#fb7185"
         return html.Tr([
             html.Td(number, style={**cell, "color": "#94a3b8"}),
-            html.Td(lap_time(seconds), style=cell),
+            html.Td(lap_time(seconds), style=cell, **({"data-lap-clock": "true"} if live else {})),
             html.Td(speed_text(speed), style={**cell, "color": "#94a3b8"}),
             html.Td(label, style={**cell, "color": color, "textAlign": "right"}),
         ], style={"background": "#20352d" if best else "#253044" if live else "transparent"})
