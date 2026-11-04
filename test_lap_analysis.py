@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import dashboard
-from gps_simulator import generate_gps
+from test_support import generate_gps, circle_timer
 from lap_analysis import LapAnalysis
 
 
@@ -20,7 +20,7 @@ def drive(analysis, start, end, phase=None):
 
 class LapAnalysisTests(unittest.TestCase):
     def setUp(self):
-        self.analysis = LapAnalysis()
+        self.analysis = LapAnalysis(timer=circle_timer())
 
     def test_partial_lap_never_becomes_reference(self):
         drive(self.analysis, 20, 45.2)
@@ -99,10 +99,10 @@ class LapAnalysisTests(unittest.TestCase):
 
 class LapDashboardTests(unittest.TestCase):
     def test_empty_and_populated_views_render(self):
-        analysis = LapAnalysis()
+        analysis = LapAnalysis(timer=circle_timer())
         with patch.object(dashboard, "lap_analysis", analysis), patch("time.monotonic", return_value=0):
             cards, status, track, delta, history = dashboard.update_lap_dashboard(0)
-            self.assertEqual(len(cards), 5)
+            self.assertEqual(len(cards), 6)
             self.assertIn("unavailable", status)
         drive(analysis, 20, 100)
         with patch.object(dashboard, "lap_analysis", analysis), patch("time.monotonic", return_value=100):
@@ -129,7 +129,7 @@ class LapDashboardTests(unittest.TestCase):
         self.assertIn("track-trace", response.get_json()["response"])
 
     def test_malformed_gps_callback_pauses_lap_analysis(self):
-        analysis = LapAnalysis()
+        analysis = LapAnalysis(timer=circle_timer())
         drive(analysis, 20, 100)
         from types import SimpleNamespace
         with patch.object(dashboard, "lap_analysis", analysis):

@@ -7,20 +7,15 @@ import paho.mqtt.client as mqtt
 
 from mqtt_runtime import run_mqtt
 from telemetry_validation import decode_object, is_number, is_uint
+from simulated_track import FINISH_LINE_START, FINISH_LINE_END
 
 BROKER = "localhost"
 PORT = 1883
 GPS_TOPIC = "umf1/car01/telemetry/gps"
 LAP_TOPIC = "umf1/car01/telemetry/lap"
-CENTER_LATITUDE = 3.1215
-CENTER_LONGITUDE = 101.6532
-TRACK_RADIUS_METERS = 100
 MINIMUM_LAP_TIME_SECONDS = 20
 MAXIMUM_FIX_GAP_SECONDS = 1.0
 
-meters_per_longitude_degree = 111_320 * math.cos(math.radians(CENTER_LATITUDE))
-FINISH_LINE_START = (CENTER_LONGITUDE + 70 / meters_per_longitude_degree, CENTER_LATITUDE)
-FINISH_LINE_END = (CENTER_LONGITUDE + 130 / meters_per_longitude_degree, CENTER_LATITUDE)
 
 
 def cross_product(a, b, c):

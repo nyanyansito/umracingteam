@@ -224,7 +224,7 @@ app.layout = html.Div(
         html.P(id="lap-status", style={"color": "#94a3b8"}),
         html.Div([
             dcc.Graph(id="track-trace", style={"flex": "2 1 480px"}),
-            html.Div([html.H3("Completed laps"), html.Div(id="lap-history")],
+            html.Div([html.H3("Session laps"), html.Div(id="lap-history")],
                      style={"flex": "1 1 240px", "padding": "20px", "background": "#172033", "borderRadius": "12px"}),
         ], style={"display": "flex", "flexWrap": "wrap", "gap": "16px"}),
         dcc.Graph(id="lap-delta-graph"),
@@ -273,6 +273,10 @@ def lap_time(seconds):
 
 def lap_figures(state):
     figure = go.Figure()
+    outline = state.get("track_outline", [])
+    if outline:
+        figure.add_trace(go.Scatter(x=[p[0] for p in outline], y=[p[1] for p in outline],
+                                   mode="lines", name="Red Bull Ring", line={"color": "#334155", "width": 9}))
     reference, current = state["reference"], state["current"]
     if reference:
         figure.add_trace(go.Scatter(x=[p[0] for p in reference], y=[p[1] for p in reference],
@@ -284,7 +288,7 @@ def lap_figures(state):
                                    name="Car" if state["fresh"] else "Last position",
                                    marker={"color": "#34d399" if state["fresh"] else "#94a3b8", "size": 12}))
     figure.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
-                         title="GPS track trace", height=420, uirevision="track",
+                         title="Red Bull Ring · Austria" if outline else "GPS track trace", height=420, uirevision="track",
                          xaxis_title="East (m)", yaxis_title="North (m)",
                          yaxis={"scaleanchor": "x", "scaleratio": 1}, margin={"t": 55, "b": 45, "l": 55, "r": 20})
     if not current and not reference:
@@ -309,7 +313,8 @@ def update_lap_dashboard(_):
     metrics = [("CURRENT LAP", str(state["lap_number"] or "—")),
                ("ELAPSED", lap_time(state["elapsed"])), ("LAST LAP", lap_time(state["last"])),
                ("BEST LAP", lap_time(state["best"])),
-               ("LIVE DELTA", "—" if delta is None else f"{delta:+.3f} s")]
+               ("LIVE DELTA", "—" if delta is None else f"{delta:+.3f} s"),
+               ("SESSION TOP SPEED", speed_text(state["session_top_speed"]) + " km/h")]
     cards = [html.Div([html.Small(label, style={"color": "#94a3b8", "letterSpacing": "1px"}),
                       html.Div(value, style={"fontSize": "30px", "fontWeight": "bold",
                                             "color": ("#34d399" if delta <= 0 else "#fb7185") if label == "LIVE DELTA" and delta is not None else "#f8fafc"})],
@@ -325,13 +330,43 @@ def update_lap_dashboard(_):
         status = "Position cannot be matched reliably to the reference · delta unavailable"
     else:
         status = f"Comparing with best lap {state['reference_lap']} · negative delta means faster"
-    rows = [html.Tr([html.Th("Lap"), html.Th("Time"), html.Th("vs prior best")])]
-    for lap in reversed(state["history"]):
-        rows.append(html.Tr([html.Td(str(lap["lap_number"])), html.Td(lap_time(lap["lap_time_seconds"])),
-                             html.Td("—" if lap["delta"] is None else f"{lap['delta']:+.3f} s")]))
-    history = html.Table(rows, style={"width": "100%", "textAlign": "left", "lineHeight": "2.2"}) if state["history"] else html.P("Complete a timed lap to see results here.")
+    history = lap_table(state)
     track, delta_figure = lap_figures(state)
     return cards, status, track, delta_figure, history
+
+
+def speed_text(value):
+    return "—" if value is None else f"{value:.0f}"
+
+
+def lap_table(state):
+    cell = {"padding": "7px 8px", "borderBottom": "1px solid #293140"}
+    def row(number, seconds, speed, difference, best=False, live=False):
+        label = "BEST" if best else "—" if difference is None else f"{difference:+.3f}"
+        color = "#4ade80" if best or (difference is not None and difference <= .1) else "#fbbf24" if difference is not None and difference < 1 else "#fb7185"
+        return html.Tr([
+            html.Td(number, style={**cell, "color": "#94a3b8"}),
+            html.Td(lap_time(seconds), style=cell),
+            html.Td(speed_text(speed), style={**cell, "color": "#94a3b8"}),
+            html.Td(label, style={**cell, "color": color, "textAlign": "right"}),
+        ], style={"background": "#20352d" if best else "#253044" if live else "transparent"})
+    rows = [row("SESSION BEST", state["best"], state["best_top_speed"], None, best=state["best"] is not None)]
+    for lap in state["history"]:
+        # Recompute against the CURRENT session best, so every row uses
+        # one consistent reference when a new fastest lap is completed.
+        rows.append(row(str(lap["lap_number"]), lap["lap_time_seconds"], lap["top_speed_kmh"],
+                        lap["lap_time_seconds"] - state["best"], lap["lap_number"] == state["reference_lap"]))
+    if state["lap_number"] is not None:
+        rows.append(row(f"{state['lap_number']} LIVE", state["elapsed"], state["lap_top_speed"], state["delta"], live=True))
+    return html.Div([
+        html.Div([html.Strong("Whole stint"), html.Span(f"{state['completed_count']} laps", style={"float": "right", "color": "#94a3b8"})]),
+        html.P("GPS top speed · completed-lap delta vs session best", style={"fontSize": "11px", "color": "#94a3b8"}),
+        html.Div(html.Table([
+            html.Thead(html.Tr([html.Th(label, style={**cell, "color": "#94a3b8", "fontSize": "11px"}) for label in ("#", "TIME", "TOP KPH", "DELTA")])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse", "fontFamily": "monospace", "fontVariantNumeric": "tabular-nums"}),
+                 style={"maxHeight": "420px", "overflowY": "auto"}),
+    ])
 
 
 @app.callback(

@@ -4,12 +4,14 @@ import time
 from collections import deque
 
 from lap_timer import LapTimer, FINISH_LINE_START, FINISH_LINE_END
+from telemetry_validation import is_number
+from simulated_track import COORDINATES
 
 
 class LapAnalysis:
     def __init__(self, timer=None):
         self.timer = timer or LapTimer()
-        self.origin = tuple((a + b) / 2 for a, b in zip(FINISH_LINE_START, FINISH_LINE_END))
+        self.origin = tuple((a + b) / 2 for a, b in zip(self.timer.finish_start, self.timer.finish_end))
         self.reference = []
         self.reference_time = None
         self.reference_lap = None
@@ -21,6 +23,11 @@ class LapAnalysis:
         self.delta = None
         self.last_receive = None
         self.session_id = None
+        self.lap_top_speed = None
+        self.session_top_speed = None
+        self.completed_count = 0
+        self.best_top_speed = None
+        self.track_id = None
 
     def xy(self, position):
         lon, lat = position
@@ -35,6 +42,7 @@ class LapAnalysis:
         self.delta = None
         self.progress = 0.0
         self.last_receive = None
+        self.lap_top_speed = None
 
     def update(self, gps, now=None):
         now = time.monotonic() if now is None else now
@@ -50,12 +58,20 @@ class LapAnalysis:
                 self.reference_time = self.reference_lap = None
                 self.history.clear()
                 self.timer.lap_number = 0
+                self.session_top_speed = None
+                self.best_top_speed = None
+                self.completed_count = 0
                 self.session_id = session
         lap = self.timer.update(gps, now=now)
         if self.timer.previous_position is None:
             self.interrupt()
             return
         point = self.xy(self.timer.previous_position)
+        self.track_id = gps.get("track_id")
+        speed = gps.get("gps_speed_kmh")
+        speed = speed if is_number(speed) and speed >= 0 else None
+        if speed is not None:
+            self.session_top_speed = max(self.session_top_speed or 0, speed)
         self.last_receive = self.timer.previous_receive_time
         if self.timer.lap_start_ms is None:
             self.current = []
@@ -71,7 +87,9 @@ class LapAnalysis:
                 duration = (crossing["elapsed_ms"] - self.current_start_ms) / 1000
                 finished = self.current + [(boundary[0], boundary[1], duration)]
                 old_best = self.reference_time
+                self.completed_count += 1
                 self.history.append({**lap, "lap_time_seconds": duration,
+                                     "top_speed_kmh": self.lap_top_speed,
                                      "delta": None if old_best is None else duration - old_best})
                 if old_best is None or duration < old_best:
                     distance = 0.0
@@ -82,12 +100,16 @@ class LapAnalysis:
                         self.reference.append((x, y, seconds, distance))
                     self.reference_time = duration
                     self.reference_lap = lap["lap_number"]
+                    self.best_top_speed = self.lap_top_speed
             self.current_start_ms = crossing["elapsed_ms"]
             self.current = [(boundary[0], boundary[1], 0.0)]
             self.approach.clear()
             self.progress = 0.0
             self.delta_trace.clear()
             self.delta = None
+            self.lap_top_speed = None
+        if speed is not None:
+            self.lap_top_speed = max(self.lap_top_speed or 0, speed)
         elapsed = (self.timer.elapsed_ms - self.timer.lap_start_ms) / 1000
         if self.current and elapsed <= self.current[-1][2]:
             return  # Duplicate source timestamps do not extend a lap trace.
@@ -140,4 +162,9 @@ class LapAnalysis:
             "current": list(self.current) if self.current else list(self.approach),
             "reference": list(self.reference), "history": list(self.history),
             "delta_trace": list(self.delta_trace),
+            "lap_top_speed": self.lap_top_speed,
+            "session_top_speed": self.session_top_speed,
+            "best_top_speed": self.best_top_speed,
+            "completed_count": self.completed_count,
+            "track_outline": [self.xy(p) for p in COORDINATES] if self.track_id == "red_bull_ring" else [],
         }

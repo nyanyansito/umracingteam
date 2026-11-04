@@ -67,7 +67,7 @@ the next eligible crossing completes the first lap. Crossing times are
 interpolated between fixes. Invalid fixes, gaps over one second in source or
 receive time, implausible position jumps, and source resets discard continuity.
 Timing re-arms at the next crossing; incomplete laps are not published.
-The current finish line and minimum lap time are for the circular simulator.
+The current finish line is for the Red Bull Ring simulator.
 Set `FINISH_LINE_START`, `FINISH_LINE_END` and `MINIMUM_LAP_TIME_SECONDS` in
 `lap_timer.py` for the actual track. The direction is from the negative side
 to the nonnegative side of the directed start-to-end line.
@@ -80,15 +80,25 @@ and a delta-versus-reference-distance graph. The trace uses local east/north
 coordinates in metres, so it works offline without map tiles or an API key.
 The first full uninterrupted lap captured by the dashboard becomes the reference;
 a faster complete lap replaces it automatically. Negative delta means faster,
-positive means slower. Each history row compares its completed time with the
-best that existed before that lap finished.
+positive means slower. The stacked list shows lap number, time, GPS top speed
+and delta against the current session best. All row deltas update when a new
+best is set. A session-best row and BEST badge identify the fastest lap.
+The session top-speed card includes valid out-lap samples as well.
 
 Lap calculations run in the dashboard using the same `LapTimer` implementation
 as the standalone lap publisher; the dashboard does not need the standalone
 publisher to display lap timing. It must receive live GPS messages and observe
 two directional finish crossings before it can record its first complete lap.
-With the circular simulator, expect the first baseline near 45 seconds and
-the first completed reference near 90 seconds when starting near the beginning.
+The simulator follows a bundled Red Bull Ring centreline in Spielberg, Austria.
+It starts just before the finish: timing arms after about one second, with the
+first complete reference after roughly 2.5 minutes. The full circuit outline
+appears as soon as simulator GPS arrives. Speeds vary through corners and
+straights, and successive laps vary by up to two percent. Fast telemetry and
+GPS use the same synthetic driving profile at a given elapsed time, but their
+independent process start times can offset their phases. This is a club-car
+test profile within the existing 120 km/h sensor limits, not F1 physics.
+Circuit data: https://github.com/bacinger/f1-circuits/blob/master/circuits/at-1969.geojson
+(MIT licence and attribution included in `tracks/LICENSE.md`).
 
 Delta is calculated by projecting the current GPS position onto nearby forward
 segments of the reference and interpolating the reference's elapsed time there.

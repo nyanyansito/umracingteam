@@ -12,7 +12,7 @@ import dashboard
 import data_processing as dp
 import esp32_simulator as gateway
 from flag_alerts import AlertTracker
-from gps_simulator import generate_gps
+from test_support import generate_gps, circle_timer
 from lap_timer import LapTimer, segments_intersect
 from mqtt_runtime import run_mqtt, start_mqtt
 from replay_telemetry import replay_records
@@ -197,7 +197,7 @@ class LapTests(unittest.TestCase):
         return result
 
     def test_joining_mid_lap_waits_for_two_crossings(self):
-        timer = LapTimer()
+        timer = circle_timer()
         self.assertEqual(self.feed(timer, 20, 45.1), [])
         laps = self.feed(timer, 45.2, 90.2)
         self.assertEqual(len(laps), 1)
@@ -206,7 +206,7 @@ class LapTests(unittest.TestCase):
     def test_invalid_fix_gap_jump_and_restart_rearm(self):
         for interruption in ("invalid", "gap", "jump", "restart", "host_gap"):
             with self.subTest(interruption=interruption):
-                timer = LapTimer()
+                timer = circle_timer()
                 self.feed(timer, 44, 60)
                 self.assertIsNotNone(timer.lap_start_ms)
                 if interruption == "invalid":
@@ -223,13 +223,13 @@ class LapTests(unittest.TestCase):
                 self.assertEqual(timer.lap_number, 0)
 
     def test_known_outage_does_not_publish_fabricated_lap(self):
-        timer = LapTimer()
+        timer = circle_timer()
         timer.update(generate_gps(1, 44), now=44)
         timer.update({"gps_valid": False}, now=45)
         self.assertIsNone(timer.update(generate_gps(2, 91), now=91))
 
     def test_timestamp_rollover_preserves_continuity(self):
-        timer = LapTimer()
+        timer = circle_timer()
         a = {**generate_gps(1, 44.9), "timestamp_ms": (1 << 32) - 50}
         b = {**generate_gps(2, 45.1), "timestamp_ms": 150}
         timer.update(a, now=0)

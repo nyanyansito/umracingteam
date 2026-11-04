@@ -1,5 +1,5 @@
-import math
 import time
+from simulated_track import sample_track
 
 
 UPDATE_RATE_HZ = 100
@@ -7,25 +7,12 @@ UPDATE_INTERVAL_SECONDS = 1 / UPDATE_RATE_HZ
 
 
 def generate_telemetry(sequence, elapsed_seconds):
-    throttle = 50 + 50 * math.sin(elapsed_seconds)
-
-    steering = 45 * math.sin(elapsed_seconds * 0.5)
-
-    speed = 60 + 20 * math.sin(elapsed_seconds * 0.3)
-
-    cycle_position = elapsed_seconds % 8
-    if 5 <= cycle_position < 6:
-        brake = 80
-    else:
-        brake = 0
-
+    sample = sample_track(elapsed_seconds)
     return {
         "sequence": sequence,
         "timestamp_ms": int(elapsed_seconds * 1000) % (1 << 32),
-        "throttle_percent": round(throttle, 2),
-        "brake_bar": round(brake, 2),
-        "steering_degrees": round(steering, 2),
-        "speed_kmh": round(speed, 2),
+        **{field: round(sample[field], 2) for field in
+           ("throttle_percent", "brake_bar", "steering_degrees", "speed_kmh")},
     }
 
 
