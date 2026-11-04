@@ -10,6 +10,8 @@ from plotly.subplots import make_subplots
 # ADDED: keeps out-of-range warnings visible for a few seconds
 from flag_alerts import AlertTracker, describe_alert
 from mqtt_runtime import start_mqtt
+from lap_analysis import LapAnalysis
+from lap_timer import GPS_TOPIC
 from telemetry_validation import FAST_FIELDS, decode_object, is_number, validate_fast_sample
 
 
@@ -47,6 +49,7 @@ speed_history = deque(maxlen=1000)
 
 # ADDED: remembers which channels were recently flagged out of range
 alert_tracker = AlertTracker()
+lap_analysis = LapAnalysis()
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -57,6 +60,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe(TOPIC)
         client.subscribe(PROCESSED_TOPIC)
         client.subscribe(GATEWAY_STATUS_TOPIC, qos=1)
+        client.subscribe(GPS_TOPIC)
 
 
 def on_disconnect(client, userdata, flags, reason_code, properties):
@@ -65,6 +69,20 @@ def on_disconnect(client, userdata, flags, reason_code, properties):
         mqtt_connected = False
         last_raw_time = None
         alert_tracker.last_processed_time = None
+        lap_analysis.interrupt()
+
+
+def on_gps_message(client, userdata, message):
+    try:
+        gps = decode_object(message.payload)
+        if getattr(message, "retain", False):
+            return
+    except (ValueError, UnicodeDecodeError):
+        with telemetry_lock:
+            lap_analysis.interrupt()
+        return
+    with telemetry_lock:
+        lap_analysis.update(gps)
 
 
 def on_message(client, userdata, message):
@@ -137,11 +155,13 @@ mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message = on_message
 mqtt_client.message_callback_add(PROCESSED_TOPIC, on_processed_message)
 mqtt_client.message_callback_add(GATEWAY_STATUS_TOPIC, on_gateway_status)
+mqtt_client.message_callback_add(GPS_TOPIC, on_gps_message)
 
 
 app = Dash(__name__)
 
 box_style = {
+    "color": "#172033",
     "width": "200px",
     "padding": "20px",
     "margin": "10px",
@@ -198,7 +218,16 @@ def make_metric_box(key, title):
 
 app.layout = html.Div(
     [
-        html.H1("UM F1 Pit-Wall Telemetry"),
+        html.P("UM RACING  /  CAR 01", style={"letterSpacing": "3px", "color": "#94a3b8"}),
+        html.H1("Pit Wall · Live telemetry"),
+        html.Div(id="lap-metrics", style={"display": "flex", "flexWrap": "wrap", "gap": "12px"}),
+        html.P(id="lap-status", style={"color": "#94a3b8"}),
+        html.Div([
+            dcc.Graph(id="track-trace", style={"flex": "2 1 480px"}),
+            html.Div([html.H3("Completed laps"), html.Div(id="lap-history")],
+                     style={"flex": "1 1 240px", "padding": "20px", "background": "#172033", "borderRadius": "12px"}),
+        ], style={"display": "flex", "flexWrap": "wrap", "gap": "16px"}),
+        dcc.Graph(id="lap-delta-graph"),
 
         # CHANGED: the four boxes are now built by make_metric_box(), which
         # adds a title id, a box id and a reserved warning line to each.
@@ -227,8 +256,82 @@ app.layout = html.Div(
     style={
         "fontFamily": "Arial",
         "padding": "30px",
+        "backgroundColor": "#0b1120",
+        "color": "#e2e8f0",
+        "minHeight": "100vh",
     },
 )
+
+
+def lap_time(seconds):
+    if seconds is None:
+        return "—"
+    milliseconds = round(seconds * 1000)
+    minutes, milliseconds = divmod(milliseconds, 60000)
+    return f"{minutes}:{milliseconds / 1000:06.3f}"
+
+
+def lap_figures(state):
+    figure = go.Figure()
+    reference, current = state["reference"], state["current"]
+    if reference:
+        figure.add_trace(go.Scatter(x=[p[0] for p in reference], y=[p[1] for p in reference],
+                                   mode="lines", name="Best lap", line={"color": "#64748b", "width": 5}))
+    if current:
+        figure.add_trace(go.Scatter(x=[p[0] for p in current], y=[p[1] for p in current],
+                                   mode="lines", name="Current trace", line={"color": "#38bdf8", "width": 3}))
+        figure.add_trace(go.Scatter(x=[current[-1][0]], y=[current[-1][1]], mode="markers",
+                                   name="Car" if state["fresh"] else "Last position",
+                                   marker={"color": "#34d399" if state["fresh"] else "#94a3b8", "size": 12}))
+    figure.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+                         title="GPS track trace", height=420, uirevision="track",
+                         xaxis_title="East (m)", yaxis_title="North (m)",
+                         yaxis={"scaleanchor": "x", "scaleratio": 1}, margin={"t": 55, "b": 45, "l": 55, "r": 20})
+    if not current and not reference:
+        figure.add_annotation(text="Waiting for a valid GPS fix", xref="paper", yref="paper", x=.5, y=.5, showarrow=False)
+    delta = go.Figure(go.Scatter(x=[p[0] for p in state["delta_trace"]],
+                                y=[p[1] for p in state["delta_trace"]], mode="lines",
+                                line={"color": "#38bdf8"}, name="Delta"))
+    delta.add_hline(y=0, line_color="#64748b")
+    delta.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+                        title="Live delta vs best lap · negative is faster", height=230,
+                        xaxis_title="Distance along reference lap (m)", yaxis_title="Delta (s)")
+    return figure, delta
+
+
+@app.callback(Output("lap-metrics", "children"), Output("lap-status", "children"),
+              Output("track-trace", "figure"), Output("lap-delta-graph", "figure"),
+              Output("lap-history", "children"), Input("dashboard-update", "n_intervals"))
+def update_lap_dashboard(_):
+    with telemetry_lock:
+        state = lap_analysis.snapshot()
+    delta = state["delta"]
+    metrics = [("CURRENT LAP", str(state["lap_number"] or "—")),
+               ("ELAPSED", lap_time(state["elapsed"])), ("LAST LAP", lap_time(state["last"])),
+               ("BEST LAP", lap_time(state["best"])),
+               ("LIVE DELTA", "—" if delta is None else f"{delta:+.3f} s")]
+    cards = [html.Div([html.Small(label, style={"color": "#94a3b8", "letterSpacing": "1px"}),
+                      html.Div(value, style={"fontSize": "30px", "fontWeight": "bold",
+                                            "color": ("#34d399" if delta <= 0 else "#fb7185") if label == "LIVE DELTA" and delta is not None else "#f8fafc"})],
+                     style={"flex": "1 1 160px", "padding": "20px", "background": "#172033", "borderRadius": "12px"})
+             for label, value in metrics]
+    if not state["fresh"]:
+        status = "GPS unavailable or stale · lap timing paused"
+    elif state["elapsed"] is None:
+        status = "Waiting for the next finish-line crossing to start a complete lap"
+    elif not state["reference"]:
+        status = "Recording the first complete lap · delta becomes available after completion"
+    elif delta is None:
+        status = "Position cannot be matched reliably to the reference · delta unavailable"
+    else:
+        status = f"Comparing with best lap {state['reference_lap']} · negative delta means faster"
+    rows = [html.Tr([html.Th("Lap"), html.Th("Time"), html.Th("vs prior best")])]
+    for lap in reversed(state["history"]):
+        rows.append(html.Tr([html.Td(str(lap["lap_number"])), html.Td(lap_time(lap["lap_time_seconds"])),
+                             html.Td("—" if lap["delta"] is None else f"{lap['delta']:+.3f} s")]))
+    history = html.Table(rows, style={"width": "100%", "textAlign": "left", "lineHeight": "2.2"}) if state["history"] else html.P("Complete a timed lap to see results here.")
+    track, delta_figure = lap_figures(state)
+    return cards, status, track, delta_figure, history
 
 
 @app.callback(
@@ -370,6 +473,9 @@ def update_dashboard(_):
     )
 
     figure.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b1120",
+        plot_bgcolor="#172033",
         height=1000,
         showlegend=False,
         title="Live Telemetry History",

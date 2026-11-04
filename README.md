@@ -72,6 +72,38 @@ Set `FINISH_LINE_START`, `FINISH_LINE_END` and `MINIMUM_LAP_TIME_SECONDS` in
 `lap_timer.py` for the actual track. The direction is from the negative side
 to the nonnegative side of the directed start-to-end line.
 
+## Live lap dashboard
+
+The dashboard now includes current lap number and elapsed time, last/best lap,
+live delta, a GPS track trace with the current position, a completed-lap table,
+and a delta-versus-reference-distance graph. The trace uses local east/north
+coordinates in metres, so it works offline without map tiles or an API key.
+The first full uninterrupted lap captured by the dashboard becomes the reference;
+a faster complete lap replaces it automatically. Negative delta means faster,
+positive means slower. Each history row compares its completed time with the
+best that existed before that lap finished.
+
+Lap calculations run in the dashboard using the same `LapTimer` implementation
+as the standalone lap publisher; the dashboard does not need the standalone
+publisher to display lap timing. It must receive live GPS messages and observe
+two directional finish crossings before it can record its first complete lap.
+With the circular simulator, expect the first baseline near 45 seconds and
+the first completed reference near 90 seconds when starting near the beginning.
+
+Delta is calculated by projecting the current GPS position onto nearby forward
+segments of the reference and interpolating the reference's elapsed time there.
+It is unavailable before a complete reference exists or when the position is
+more than 20 m from a plausible reference segment. GPS gaps over one second,
+invalid fixes and broker disconnects invalidate the current lap. Completed laps
+remain available across GPS dropouts, but a source restart clears the session.
+The dashboard keeps up to 50 completed-lap results in memory; restart/reload of
+the Python dashboard clears this analysis state. A browser refresh does not.
+
+The default finish line is for the simulator: configure `lap_timer.py` for the
+actual circuit. The delta is a GPS estimate, not a transponder timing result.
+Sensor graphs still use their own telemetry timestamps; they are not overlaid
+onto GPS positions because the current simulators have independent clocks.
+
 ## Recording and replay
 
 The logger creates matching files under `logs/`:

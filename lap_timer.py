@@ -48,6 +48,7 @@ class LapTimer:
         self.reset_continuity()
 
     def reset_continuity(self):
+        self.crossing = None
         self.previous_position = None
         self.previous_timestamp_ms = None
         self.previous_receive_time = None
@@ -55,6 +56,7 @@ class LapTimer:
         self.lap_start_ms = None
 
     def update(self, gps, now=None):
+        self.crossing = None
         now = time.monotonic() if now is None else now
         if not isinstance(gps, dict) or gps.get("gps_valid") is not True:
             self.reset_continuity()
@@ -106,6 +108,12 @@ class LapTimer:
                         if session is not None:
                             result["session_id"] = session
                         self.lap_start_ms = crossing_ms
+                    if self.lap_start_ms == crossing_ms:
+                        fraction = -before / (after - before)
+                        self.crossing = {
+                            "elapsed_ms": crossing_ms,
+                            "position": tuple(a + fraction * (b - a) for a, b in zip(self.previous_position, position)),
+                        }
 
         self.previous_position = position
         self.previous_timestamp_ms = timestamp
