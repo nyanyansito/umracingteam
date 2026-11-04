@@ -204,7 +204,7 @@ class LapTests(unittest.TestCase):
         self.assertAlmostEqual(laps[0]["lap_time_seconds"], 45, places=2)
 
     def test_invalid_fix_gap_jump_and_restart_rearm(self):
-        for interruption in ("invalid", "gap", "jump", "restart", "host_gap"):
+        for interruption in ("invalid", "gap", "jump", "restart"):
             with self.subTest(interruption=interruption):
                 timer = circle_timer()
                 self.feed(timer, 44, 60)
@@ -215,8 +215,6 @@ class LapTests(unittest.TestCase):
                     timer.update(generate_gps(0, 91), now=91)
                 elif interruption == "jump":
                     timer.update({**generate_gps(0, 60.1), "latitude": 4}, now=60.1)
-                elif interruption == "host_gap":
-                    timer.update(generate_gps(0, 60.1), now=62)
                 else:
                     timer.update(generate_gps(0, 0), now=60.1)
                 self.assertIsNone(timer.lap_start_ms)

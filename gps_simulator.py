@@ -1,6 +1,6 @@
 import json
-import time
 from simulated_track import sample_track
+from simulation_clock import SimulationClock
 import uuid
 
 import paho.mqtt.client as mqtt
@@ -39,13 +39,13 @@ def main():
     print(f"Publishing to {TOPIC}")
     print("Press Control + C to stop")
 
-    start_time = time.monotonic()
+    clock = SimulationClock(UPDATE_INTERVAL_SECONDS)
     sequence = 0
     session_id = uuid.uuid4().hex
 
     try:
         while True:
-            elapsed = time.monotonic() - start_time
+            elapsed = clock.elapsed
             gps_data = generate_gps(sequence, elapsed)
             gps_data["session_id"] = session_id
 
@@ -62,7 +62,7 @@ def main():
             )
 
             sequence = (sequence + 1) % 65536
-            time.sleep(UPDATE_INTERVAL_SECONDS)
+            clock.advance()
 
     except KeyboardInterrupt:
         print()

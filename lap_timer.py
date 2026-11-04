@@ -82,7 +82,7 @@ class LapTimer:
                 (latitude - self.previous_position[1]) * 111_320,
             )
             if (delta_ms > self.maximum_gap_seconds * 1000
-                    or receive_gap > self.maximum_gap_seconds or receive_gap < 0
+                    or receive_gap < 0
                     or distance > 20 + 100 * delta_ms / 1000):
                 self.reset_continuity()
             else:

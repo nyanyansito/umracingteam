@@ -1,5 +1,5 @@
-import time
 from simulated_track import sample_track
+from simulation_clock import SimulationClock
 
 
 UPDATE_RATE_HZ = 100
@@ -20,18 +20,18 @@ def main():
     print("Virtual STM32 started")
     print("Press Control + C to stop")
 
-    start_time = time.monotonic()
+    clock = SimulationClock(UPDATE_INTERVAL_SECONDS)
     sequence = 0
 
     try:
         while True:
-            elapsed = time.monotonic() - start_time
+            elapsed = clock.elapsed
             telemetry = generate_telemetry(sequence, elapsed)
 
             print(telemetry)
 
             sequence = (sequence + 1) % 65536
-            time.sleep(UPDATE_INTERVAL_SECONDS)
+            clock.advance()
 
     except KeyboardInterrupt:
         print()

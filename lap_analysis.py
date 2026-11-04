@@ -1,5 +1,6 @@
 """Live GPS lap state and a spatial delta against the session's best lap."""
 import math
+import bisect
 import time
 from collections import deque
 
@@ -13,6 +14,7 @@ class LapAnalysis:
         self.timer = timer or LapTimer()
         self.origin = tuple((a + b) / 2 for a, b in zip(self.timer.finish_start, self.timer.finish_end))
         self.reference = []
+        self.reference_distances = []
         self.reference_time = None
         self.reference_lap = None
         self.current = []
@@ -55,6 +57,7 @@ class LapAnalysis:
             if (isinstance(session, str) and session != self.session_id) or reboot:
                 self.interrupt()
                 self.reference = []
+                self.reference_distances = []
                 self.reference_time = self.reference_lap = None
                 self.history.clear()
                 self.timer.lap_number = 0
@@ -99,6 +102,7 @@ class LapAnalysis:
                             distance += math.hypot(x - self.reference[-1][0], y - self.reference[-1][1])
                         self.reference.append((x, y, seconds, distance))
                     self.reference_time = duration
+                    self.reference_distances = [p[3] for p in self.reference]
                     self.reference_lap = lap["lap_number"]
                     self.best_top_speed = self.lap_top_speed
             self.current_start_ms = crossing["elapsed_ms"]
@@ -125,7 +129,10 @@ class LapAnalysis:
         if len(self.reference) < 2:
             return None
         candidates = []
-        for a, b in zip(self.reference, self.reference[1:]):
+        start = max(0, bisect.bisect_left(self.reference_distances, self.progress - 3) - 1)
+        end = min(len(self.reference) - 1, bisect.bisect_right(self.reference_distances, self.progress + 30))
+        for index in range(start, end):
+            a, b = self.reference[index], self.reference[index + 1]
             # Stay near forward progress to avoid jumping to another part
             # of a circuit at crossings or adjacent straights.
             if b[3] < self.progress - 3 or a[3] > self.progress + 30:
@@ -150,12 +157,10 @@ class LapAnalysis:
     def snapshot(self, now=None):
         now = time.monotonic() if now is None else now
         fresh = self.last_receive is not None and 0 <= now - self.last_receive <= self.timer.maximum_gap_seconds
-        if not fresh and self.last_receive is not None:
-            self.interrupt()
         return {
             "fresh": fresh,
             "lap_number": self.timer.lap_number + 1 if self.current else None,
-            "elapsed": self.current[-1][2] if fresh and self.current else None,
+            "elapsed": self.current[-1][2] if self.current else None,
             "last": self.history[-1]["lap_time_seconds"] if self.history else None,
             "best": self.reference_time, "reference_lap": self.reference_lap,
             "delta": self.delta if fresh else None,

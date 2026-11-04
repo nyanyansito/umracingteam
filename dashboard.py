@@ -249,9 +249,10 @@ app.layout = html.Div(
 
         dcc.Interval(
             id="dashboard-update",
-            interval=100,
+            interval=500,
             n_intervals=0,
         ),
+        dcc.Interval(id="lap-update", interval=250, n_intervals=0),
     ],
     style={
         "fontFamily": "Arial",
@@ -305,7 +306,7 @@ def lap_figures(state):
 
 @app.callback(Output("lap-metrics", "children"), Output("lap-status", "children"),
               Output("track-trace", "figure"), Output("lap-delta-graph", "figure"),
-              Output("lap-history", "children"), Input("dashboard-update", "n_intervals"))
+              Output("lap-history", "children"), Input("lap-update", "n_intervals"))
 def update_lap_dashboard(_):
     with telemetry_lock:
         state = lap_analysis.snapshot()
@@ -321,7 +322,7 @@ def update_lap_dashboard(_):
                      style={"flex": "1 1 160px", "padding": "20px", "background": "#172033", "borderRadius": "12px"})
              for label, value in metrics]
     if not state["fresh"]:
-        status = "GPS unavailable or stale · lap timing paused"
+        status = "GPS unavailable or stale · showing last known lap time"
     elif state["elapsed"] is None:
         status = "Waiting for the next finish-line crossing to start a complete lap"
     elif not state["reference"]:

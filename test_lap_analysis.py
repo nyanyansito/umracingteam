@@ -72,12 +72,13 @@ class LapAnalysisTests(unittest.TestCase):
         drive(self.analysis, 110, 135.2)
         self.assertEqual(len(self.analysis.history), 1)
 
-    def test_receive_timeout_invalidates_without_another_packet(self):
+    def test_receive_timeout_hides_delta_without_resetting_lap(self):
         drive(self.analysis, 20, 100)
         state = self.analysis.snapshot(now=102)
         self.assertFalse(state["fresh"])
         self.assertIsNone(state["delta"])
-        self.assertIsNone(state["elapsed"])
+        self.assertAlmostEqual(state["elapsed"], 10, places=2)
+        self.assertIsNotNone(self.analysis.timer.lap_start_ms)
 
     def test_restart_clears_reference_and_lap_history(self):
         drive(self.analysis, 20, 100)
@@ -85,6 +86,30 @@ class LapAnalysisTests(unittest.TestCase):
         self.assertEqual(self.analysis.history, self.analysis.history.__class__(maxlen=50))
         self.assertIsNone(self.analysis.reference_time)
         self.assertEqual(self.analysis.current, [])
+
+    def test_display_stall_then_contiguous_gps_completes_same_lap(self):
+        drive(self.analysis, 20, 100)
+        baseline = self.analysis.timer.lap_start_ms
+        for now in (102, 102.5, 103):
+            state = self.analysis.snapshot(now=now)
+            self.assertFalse(state["fresh"])
+            self.assertAlmostEqual(state["elapsed"], 10, places=2)
+            self.assertEqual(self.analysis.timer.lap_start_ms, baseline)
+        for tick in range(1001, 1353):
+            source = tick / 10
+            self.analysis.update(fix(source), now=source + 3)
+        state = self.analysis.snapshot(now=138.2)
+        self.assertEqual(len(state["history"]), 2)
+        self.assertAlmostEqual(state["last"], 45, places=2)
+        self.assertAlmostEqual(state["elapsed"], .2, places=2)
+
+    def test_actual_source_gap_still_discards_partial_lap(self):
+        drive(self.analysis, 20, 100)
+        self.analysis.snapshot(now=102)
+        self.analysis.update(fix(103), now=103)
+        self.assertIsNone(self.analysis.timer.lap_start_ms)
+        self.assertEqual(self.analysis.current, [])
+        self.assertEqual(len(self.analysis.history), 1)
 
     def test_off_reference_position_has_no_delta(self):
         drive(self.analysis, 20, 100)
@@ -122,8 +147,8 @@ class LapDashboardTests(unittest.TestCase):
             ("track-trace", "figure"), ("lap-delta-graph", "figure"), ("lap-history", "children"))]
         response = client.post("/_dash-update-component", json={
             "output": callback["output"], "outputs": outputs,
-            "inputs": [{"id": "dashboard-update", "property": "n_intervals", "value": 0}],
-            "changedPropIds": ["dashboard-update.n_intervals"],
+            "inputs": [{"id": "lap-update", "property": "n_intervals", "value": 0}],
+            "changedPropIds": ["lap-update.n_intervals"],
         })
         self.assertEqual(response.status_code, 200)
         self.assertIn("track-trace", response.get_json()["response"])

@@ -1,5 +1,5 @@
 import socket
-import time
+from simulation_clock import SimulationClock
 
 from stm32_simulator import generate_telemetry
 from telemetry_packet import encode_fast_telemetry
@@ -20,19 +20,19 @@ def serve_connection(connection):
     UART peripheral would send them. It is the receiving side's job
     (the ESP32) to find packet boundaries in the stream.
     """
-    start_time = time.monotonic()
+    clock = SimulationClock(UPDATE_INTERVAL_SECONDS)
     sequence = 0
 
     try:
         while True:
-            elapsed = time.monotonic() - start_time
+            elapsed = clock.elapsed
             telemetry = generate_telemetry(sequence, elapsed)
             packet = encode_fast_telemetry(telemetry)
 
             connection.sendall(packet)
 
             sequence = (sequence + 1) % 65536
-            time.sleep(UPDATE_INTERVAL_SECONDS)
+            clock.advance()
 
     except (BrokenPipeError, ConnectionResetError, OSError):
         # The ESP32 side disconnected (or its socket errored out).

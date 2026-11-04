@@ -94,8 +94,9 @@ pit-wall delivery (fast telemetry uses QoS 0).
 
 The first valid directional finish-line crossing establishes a baseline;
 the next eligible crossing completes the first lap. Crossing times are
-interpolated between fixes. Invalid fixes, gaps over one second in source or
-receive time, implausible position jumps, and source resets discard continuity.
+interpolated between fixes. Invalid fixes, gaps over one second in GPS source
+timestamps, implausible position jumps, and source resets discard continuity.
+Late delivery of otherwise consecutive source samples does not reset the lap.
 Timing re-arms at the next crossing; incomplete laps are not published.
 The current finish line is for the Red Bull Ring simulator.
 Set `FINISH_LINE_START`, `FINISH_LINE_END` and `MINIMUM_LAP_TIME_SECONDS` in
@@ -133,11 +134,18 @@ Circuit data: https://github.com/bacinger/f1-circuits/blob/master/circuits/at-19
 Delta is calculated by projecting the current GPS position onto nearby forward
 segments of the reference and interpolating the reference's elapsed time there.
 It is unavailable before a complete reference exists or when the position is
-more than 20 m from a plausible reference segment. GPS gaps over one second,
+more than 20 m from a plausible reference segment. GPS source gaps over one second,
 invalid fixes and broker disconnects invalidate the current lap. Completed laps
 remain available across GPS dropouts, but a source restart clears the session.
 The dashboard keeps up to 50 completed-lap results in memory; restart/reload of
 the Python dashboard clears this analysis state. A browser refresh does not.
+
+A stale display freezes the last known lap time and hides delta; refreshing the
+page never clears an active lap. Chart refresh rates are 4 Hz for the lap panel
+and 2 Hz for sensor histories, independently of data reception. The simulators
+use a paced virtual clock: host scheduling pauses freeze simulated time instead
+of teleporting the car forward or emitting a catch-up flood of packets. On a slow
+machine simulated lap duration can therefore exceed its nominal wall-clock time.
 
 The default finish line is for the simulator: configure `lap_timer.py` for the
 actual circuit. The delta is a GPS estimate, not a transponder timing result.
