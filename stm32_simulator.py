@@ -2,7 +2,7 @@ import math
 import time
 
 
-UPDATE_RATE_HZ = 10
+UPDATE_RATE_HZ = 100
 UPDATE_INTERVAL_SECONDS = 1 / UPDATE_RATE_HZ
 
 
@@ -21,7 +21,7 @@ def generate_telemetry(sequence, elapsed_seconds):
 
     return {
         "sequence": sequence,
-        "timestamp_ms": int(elapsed_seconds * 1000),
+        "timestamp_ms": int(elapsed_seconds * 1000) % (1 << 32),
         "throttle_percent": round(throttle, 2),
         "brake_bar": round(brake, 2),
         "steering_degrees": round(steering, 2),
@@ -43,7 +43,7 @@ def main():
 
             print(telemetry)
 
-            sequence += 1
+            sequence = (sequence + 1) % 65536
             time.sleep(UPDATE_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:

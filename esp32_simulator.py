@@ -2,8 +2,11 @@ import json
 import socket
 import struct
 import time
+import uuid
 
 import paho.mqtt.client as mqtt
+from mqtt_runtime import start_mqtt
+from sequence_tracker import SequenceTracker
 
 from telemetry_packet import (
     CRC_SIZE,
@@ -20,7 +23,7 @@ STM32_PORT = 9000
 
 STM32_RECONNECT_MIN_DELAY_SECONDS = 1
 STM32_RECONNECT_MAX_DELAY_SECONDS = 10
-STM32_SOCKET_TIMEOUT_SECONDS = 1.0
+STM32_SOCKET_TIMEOUT_SECONDS = 0.1
 
 PACKET_SIZE = HEADER_SIZE + PAYLOAD_SIZE + CRC_SIZE
 START_MARKER_BYTES = struct.pack("<H", START_MARKER)
@@ -40,6 +43,9 @@ packet_count = 0
 decode_error_count = 0
 dropped_count = 0
 is_mqtt_connected = False
+stm32_connected = False
+last_packet_time = None
+TELEMETRY_FRESHNESS_SECONDS = 2.0
 
 
 # ---------------------------------------------------------------------
@@ -102,57 +108,34 @@ def extract_packets(buffer):
 
 
 def connect_to_stm32():
-    """Connect to the simulated STM32 UART link, retrying with
-    exponential backoff until it succeeds. Mirrors how the MQTT client
-    handles reconnection, but for the UART side of the gateway.
-    """
-    delay = STM32_RECONNECT_MIN_DELAY_SECONDS
-
-    while True:
-        try:
-            uart_socket = socket.socket(
-                socket.AF_INET, socket.SOCK_STREAM
-            )
-            uart_socket.settimeout(STM32_SOCKET_TIMEOUT_SECONDS)
-            uart_socket.connect((STM32_HOST, STM32_PORT))
-
-            print("Virtual ESP32 connected to STM32 UART link")
-            return uart_socket
-
-        except (ConnectionRefusedError, OSError) as error:
-            print(
-                f"STM32 UART link unavailable ({error}). "
-                f"Retrying in {delay}s..."
-            )
-            time.sleep(delay)
-            delay = min(delay * 2, STM32_RECONNECT_MAX_DELAY_SECONDS)
+    """One bounded connection attempt; main schedules retries and heartbeats."""
+    uart_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        uart_socket.settimeout(STM32_SOCKET_TIMEOUT_SECONDS)
+        uart_socket.connect((STM32_HOST, STM32_PORT))
+    except BaseException:
+        uart_socket.close()
+        raise
+    return uart_socket
 
 
-# ---------------------------------------------------------------------
-# MQTT link
-# ---------------------------------------------------------------------
-
-def publish_status(client):
-    """Publish a heartbeat status message covering both links: the
-    UART link to the STM32 and the MQTT link to the pit wall.
-
-    retain=True so a client that subscribes late still immediately
-    sees the last known status instead of waiting for the next update.
-    """
-    status_message = {
-        "online": True,
+def build_status(now=None, online=True):
+    now = time.monotonic() if now is None else now
+    age_ms = None if last_packet_time is None else max(0, int((now - last_packet_time) * 1000))
+    return {
+        "online": online,
+        "stm32_connected": online and stm32_connected,
+        "telemetry_fresh": online and stm32_connected and age_ms is not None and age_ms <= TELEMETRY_FRESHNESS_SECONDS * 1000,
+        "last_valid_packet_age_ms": age_ms,
         "packet_count": packet_count,
         "decode_error_count": decode_error_count,
         "dropped_count": dropped_count,
         "timestamp_ms": int(time.time() * 1000),
     }
 
-    client.publish(
-        STATUS_TOPIC,
-        json.dumps(status_message),
-        qos=1,
-        retain=True,
-    )
+
+def publish_status(client):
+    return client.publish(STATUS_TOPIC, json.dumps(build_status()), qos=1, retain=True)
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -197,6 +180,8 @@ mqtt_client.will_set(
     STATUS_TOPIC,
     payload=json.dumps({
         "online": False,
+        "stm32_connected": False,
+        "telemetry_fresh": False,
         "packet_count": packet_count,
         "decode_error_count": decode_error_count,
         "dropped_count": dropped_count,
@@ -217,96 +202,87 @@ mqtt_client.reconnect_delay_set(
 
 def main():
     global packet_count, decode_error_count, dropped_count
+    global stm32_connected, last_packet_time
 
-    print("Virtual ESP32 starting...")
-    mqtt_client.connect(BROKER, PORT)
-    mqtt_client.loop_start()
-
-    uart_socket = connect_to_stm32()
+    uart_socket = None
     buffer = b""
-    last_status_time = time.monotonic()
-
-    print("Receiving simulated UART byte stream")
-    print("Press Control + C to stop")
-
+    reconnect_at = 0
+    reconnect_delay = STM32_RECONNECT_MIN_DELAY_SECONDS
+    last_status_time = -STATUS_INTERVAL_SECONDS
+    stream_session = None
+    tracker = SequenceTracker()
     try:
+        start_mqtt(mqtt_client, BROKER, PORT)
         while True:
-            try:
-                chunk = uart_socket.recv(1024)
-
-                if chunk == b"":
-                    # Peer closed the connection cleanly.
-                    raise ConnectionResetError("STM32 link closed")
-
-                buffer += chunk
-
-            except socket.timeout:
-                # No data this cycle -- still fine, loop back around
-                # so we can publish status on schedule below.
-                chunk = None
-
-            except (ConnectionResetError, OSError) as error:
-                print(f"STM32 UART link lost ({error}). Reconnecting...")
-                uart_socket.close()
-                uart_socket = connect_to_stm32()
-                buffer = b""
-                continue
-
-            if chunk:
-                decoded_packets, buffer, errors = extract_packets(buffer)
-                decode_error_count += errors
-
-                for decoded_telemetry in decoded_packets:
-                    if is_mqtt_connected:
-                        mqtt_client.publish(
-                            TELEMETRY_TOPIC,
-                            json.dumps(decoded_telemetry),
-                        )
-                        packet_count += 1
-
-                        print(
-                            f"Packet {decoded_telemetry['sequence']}: "
-                            f"throttle="
-                            f"{decoded_telemetry['throttle_percent']}%, "
-                            f"brake={decoded_telemetry['brake_bar']} bar, "
-                            f"speed={decoded_telemetry['speed_kmh']} km/h"
-                        )
-                    else:
-                        # Decoded fine, but nowhere to publish it right
-                        # now -- same as a real ESP32 with no Wi-Fi.
-                        dropped_count += 1
-                        print(
-                            f"Packet {decoded_telemetry['sequence']}: "
-                            f"DROPPED (MQTT not connected)"
-                        )
-
             now = time.monotonic()
             if now - last_status_time >= STATUS_INTERVAL_SECONDS:
                 if is_mqtt_connected:
                     publish_status(mqtt_client)
                 last_status_time = now
 
-    except KeyboardInterrupt:
-        print()
-        print("Virtual ESP32 stopped")
+            if uart_socket is None:
+                if now < reconnect_at:
+                    time.sleep(0.01)
+                    continue
+                try:
+                    uart_socket = connect_to_stm32()
+                except OSError as error:
+                    print(f"STM32 unavailable ({error}); retrying in {reconnect_delay}s")
+                    reconnect_at = time.monotonic() + reconnect_delay
+                    reconnect_delay = min(reconnect_delay * 2, STM32_RECONNECT_MAX_DELAY_SECONDS)
+                    continue
+                stm32_connected = True
+                last_packet_time = None
+                reconnect_delay = STM32_RECONNECT_MIN_DELAY_SECONDS
+                stream_session = uuid.uuid4().hex
+                tracker = SequenceTracker()
+                buffer = b""
 
+            try:
+                chunk = uart_socket.recv(1024)
+                if not chunk:
+                    raise ConnectionResetError("STM32 link closed")
+            except socket.timeout:
+                continue
+            except OSError as error:
+                print(f"STM32 link lost ({error})")
+                uart_socket.close()
+                uart_socket = None
+                stm32_connected = False
+                last_packet_time = None
+                buffer = b""
+                reconnect_at = time.monotonic() + reconnect_delay
+                if is_mqtt_connected:
+                    publish_status(mqtt_client)
+                continue
+
+            decoded, buffer, errors = extract_packets(buffer + chunk)
+            decode_error_count += errors
+            for telemetry in decoded:
+                last_packet_time = time.monotonic()
+                sequence_result = tracker.check(telemetry["sequence"], telemetry["timestamp_ms"])
+                if sequence_result["status"] == "reset":
+                    stream_session = uuid.uuid4().hex
+                telemetry["session_id"] = stream_session
+                if is_mqtt_connected:
+                    result = mqtt_client.publish(TELEMETRY_TOPIC, json.dumps(telemetry))
+                    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                        packet_count += 1
+                    else:
+                        dropped_count += 1
+                else:
+                    dropped_count += 1
+    except KeyboardInterrupt:
+        print("Virtual ESP32 stopped")
     finally:
+        stm32_connected = False
+        if uart_socket is not None:
+            uart_socket.close()
         if is_mqtt_connected:
-            status_message = {
-                "online": False,
-                "packet_count": packet_count,
-                "decode_error_count": decode_error_count,
-                "dropped_count": dropped_count,
-            }
-            mqtt_client.publish(
-                STATUS_TOPIC,
-                json.dumps(status_message),
-                qos=1,
-                retain=True,
-            )
-        mqtt_client.loop_stop()
+            result = mqtt_client.publish(STATUS_TOPIC, json.dumps(build_status(online=False)), qos=1, retain=True)
+            result.wait_for_publish(timeout=1)
         mqtt_client.disconnect()
-        uart_socket.close()
+        mqtt_client.loop_stop()
 
 
 if __name__ == "__main__":

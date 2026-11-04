@@ -2,8 +2,8 @@
 
 Why this exists
 ---------------
-The fast telemetry stream sends about 10 messages a second. If one bad
-value arrives, the very next normal message arrives ~100 ms later and
+The fast telemetry stream sends about 100 messages a second. If one bad
+value arrives, the very next normal message arrives ~10 ms later and
 would instantly "clear" the warning -- the dashboard would flash it for
 a blink and a human would never see it.
 
@@ -17,6 +17,7 @@ dashboard.
 """
 
 import time
+from telemetry_validation import is_number
 
 
 HOLD_SECONDS = 5.0
@@ -28,6 +29,8 @@ class AlertTracker:
         self.hold_seconds = hold_seconds
         self._alerts = {}
         self.processed_seen = False
+        self.last_processed_time = None
+        self.latest_flags = {}
 
     def update(self, processed_message, now=None):
         """Feed in one processed message (as published by
@@ -38,8 +41,10 @@ class AlertTracker:
             now = time.monotonic()
 
         self.processed_seen = True
+        self.last_processed_time = now
 
         range_flags = processed_message.get("range_flags", {})
+        self.latest_flags = range_flags.copy()
         values = processed_message.get("values", {})
         limits = processed_message.get("limits", {})
 
@@ -54,6 +59,7 @@ class AlertTracker:
                 "min": field_limits.get("min"),
                 "max": field_limits.get("max"),
                 "time": now,
+                "flag": flag,
             }
 
     def active(self, now=None):
@@ -76,6 +82,7 @@ class AlertTracker:
                 "min": alert["min"],
                 "max": alert["max"],
                 "age_seconds": now - alert["time"],
+                "flag": alert["flag"],
             }
             for field_name, alert in self._alerts.items()
         }
@@ -86,7 +93,7 @@ def describe_alert(alert):
     'Got 300.00 (allowed 0 to 100) - 2s ago'.
     """
     value = alert["value"]
-    value_text = f"{value:.2f}" if isinstance(value, (int, float)) else str(value)
+    value_text = f"{value:.2f}" if is_number(value) else str(value)
 
     low, high = alert["min"], alert["max"]
     if low is not None and high is not None:

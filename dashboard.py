@@ -1,5 +1,5 @@
-import json
 import threading
+import time
 from collections import deque
 
 import paho.mqtt.client as mqtt
@@ -9,6 +9,8 @@ from plotly.subplots import make_subplots
 
 # ADDED: keeps out-of-range warnings visible for a few seconds
 from flag_alerts import AlertTracker, describe_alert
+from mqtt_runtime import start_mqtt
+from telemetry_validation import FAST_FIELDS, decode_object, is_number, validate_fast_sample
 
 
 BROKER = "localhost"
@@ -28,80 +30,113 @@ telemetry = {
 }
 
 telemetry_lock = threading.Lock()
+FRESHNESS_SECONDS = 2.0
+GATEWAY_STATUS_TOPIC = "umf1/car01/gateway/status"
+GATEWAY_FRESHNESS_SECONDS = 3.0
+last_raw_time = None
+raw_invalid = False
+mqtt_connected = False
+gateway_status = None
+last_gateway_time = None
 
-time_history = deque(maxlen=100)
-throttle_history = deque(maxlen=100)
-brake_history = deque(maxlen=100)
-steering_history = deque(maxlen=100)
-speed_history = deque(maxlen=100)
+time_history = deque(maxlen=1000)
+throttle_history = deque(maxlen=1000)
+brake_history = deque(maxlen=1000)
+steering_history = deque(maxlen=1000)
+speed_history = deque(maxlen=1000)
 
 # ADDED: remembers which channels were recently flagged out of range
 alert_tracker = AlertTracker()
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
+    global mqtt_connected
+    with telemetry_lock:
+        mqtt_connected = reason_code == 0
     if reason_code == 0:
-        print("Dashboard connected to Mosquitto")
         client.subscribe(TOPIC)
-        client.subscribe(PROCESSED_TOPIC)  # ADDED
-    else:
-        print(f"MQTT connection failed: {reason_code}")
+        client.subscribe(PROCESSED_TOPIC)
+        client.subscribe(GATEWAY_STATUS_TOPIC, qos=1)
+
+
+def on_disconnect(client, userdata, flags, reason_code, properties):
+    global mqtt_connected, last_raw_time
+    with telemetry_lock:
+        mqtt_connected = False
+        last_raw_time = None
+        alert_tracker.last_processed_time = None
 
 
 def on_message(client, userdata, message):
+    global last_raw_time, raw_invalid
     try:
-        received_data = json.loads(
-            message.payload.decode("utf-8")
-        )
-
+        received = validate_fast_sample(decode_object(message.payload))
+        if getattr(message, "retain", False):
+            raise ValueError("Retained telemetry is not a live sample")
+        # Extract everything before changing any shared state.
+        sample = (received["timestamp_ms"] / 1000,
+                  *(received[field] for field in FAST_FIELDS))
+    except (ValueError, UnicodeDecodeError):
         with telemetry_lock:
-            telemetry.update(received_data)
-
-            time_history.append(
-                received_data["timestamp_ms"] / 1000
-            )
-            throttle_history.append(
-                received_data["throttle_percent"]
-            )
-            brake_history.append(
-                received_data["brake_bar"]
-            )
-            steering_history.append(
-                received_data["steering_degrees"]
-            )
-            speed_history.append(
-                received_data["speed_kmh"]
-            )
-
-    except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+            raw_invalid = True
         print("Dashboard received an invalid message")
+        return
+    with telemetry_lock:
+        telemetry.clear()
+        telemetry.update(received)
+        for history, value in zip((time_history, throttle_history, brake_history,
+                                   steering_history, speed_history), sample):
+            history.append(value)
+        last_raw_time = time.monotonic()
+        raw_invalid = False
 
 
-# ADDED: handler used ONLY for PROCESSED_TOPIC (see message_callback_add
-# below), so on_message above is untouched and still handles TOPIC.
 def on_processed_message(client, userdata, message):
     try:
-        processed_message = json.loads(
-            message.payload.decode("utf-8")
-        )
-
+        processed = decode_object(message.payload)
+        flags, values, limits = (processed.get(key) for key in ("range_flags", "values", "limits"))
+        if (not all(isinstance(item, dict) for item in (flags, values, limits))
+                or not set(FAST_FIELDS).issubset(flags)
+                or getattr(message, "retain", False)):
+            raise ValueError("Incomplete validation result")
+        for field, flag in flags.items():
+            if flag not in ("ok", "out_of_range", "invalid", "missing"):
+                raise ValueError("Unknown validation flag")
+            if field in FAST_FIELDS and flag in ("ok", "out_of_range") and not is_number(values.get(field)):
+                raise ValueError("Invalid validated value")
+            bounds = limits.get(field, {})
+            if not isinstance(bounds, dict) or any(
+                    bound is not None and not is_number(bound)
+                    for bound in (bounds.get("min"), bounds.get("max"))):
+                raise ValueError("Invalid limits")
         with telemetry_lock:
-            alert_tracker.update(processed_message)
-
-    except (json.JSONDecodeError, UnicodeDecodeError):
+            alert_tracker.update(processed)
+    except (ValueError, UnicodeDecodeError):
         print("Dashboard received an invalid processed message")
 
 
-mqtt_client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2,
-    client_id="umf1-dashboard"
-)
+def on_gateway_status(client, userdata, message):
+    global gateway_status, last_gateway_time
+    try:
+        status = decode_object(message.payload)
+        if (type(status.get("online")) is not bool
+                or type(status.get("stm32_connected")) is not bool
+                or type(status.get("telemetry_fresh")) is not bool):
+            raise ValueError("Invalid gateway status")
+        with telemetry_lock:
+            gateway_status = status
+            # A retained heartbeat alone is not evidence of a live gateway.
+            last_gateway_time = None if getattr(message, "retain", False) else time.monotonic()
+    except (ValueError, UnicodeDecodeError):
+        print("Dashboard received invalid gateway status")
 
+
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="umf1-dashboard")
 mqtt_client.on_connect = on_connect
+mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message = on_message
-mqtt_client.message_callback_add(PROCESSED_TOPIC, on_processed_message)  # ADDED
-mqtt_client.connect(BROKER, PORT)
-mqtt_client.loop_start()
+mqtt_client.message_callback_add(PROCESSED_TOPIC, on_processed_message)
+mqtt_client.message_callback_add(GATEWAY_STATUS_TOPIC, on_gateway_status)
 
 
 app = Dash(__name__)
@@ -233,7 +268,15 @@ def update_dashboard(_):
 
         # ADDED: snapshot of warnings that are still active
         active_alerts = alert_tracker.active()
-        processed_seen = alert_tracker.processed_seen
+        now = time.monotonic()
+        raw_fresh = last_raw_time is not None and now - last_raw_time <= FRESHNESS_SECONDS
+        processed_fresh = (alert_tracker.last_processed_time is not None
+                           and now - alert_tracker.last_processed_time <= FRESHNESS_SECONDS)
+        current_errors = {field for field, flag in alert_tracker.latest_flags.items() if flag != "ok"}
+        connected = mqtt_connected
+        invalid_sample = raw_invalid
+        status = gateway_status.copy() if gateway_status else None
+        gateway_fresh = last_gateway_time is not None and now - last_gateway_time <= GATEWAY_FRESHNESS_SECONDS
 
     figure = make_subplots(
         rows=4,
@@ -344,36 +387,33 @@ def update_dashboard(_):
             alert_outputs += [
                 f"\u26a0 {title}",  # warning triangle on the box title
                 alert_box_style,
-                f"\u26a0 OUT OF RANGE: {describe_alert(alert)}",
+                f"\u26a0 {alert.get('flag', 'out_of_range').upper().replace('_', ' ')}: {describe_alert(alert)}",
             ]
 
-    # ADDED: one-line summary under the boxes
-    if active_alerts:
+    if not connected:
+        validation_text = "Disconnected from telemetry broker"
+    elif invalid_sample:
+        validation_text = "WARNING - invalid or incomplete telemetry sample"
+    elif not raw_fresh:
+        validation_text = "STALE - waiting for live telemetry"
+    elif status is not None and not status["online"]:
+        validation_text = "Gateway offline"
+    elif status is not None and (not gateway_fresh or not status["stm32_connected"] or not status["telemetry_fresh"]):
+        validation_text = "STALE - STM32 link or gateway status unavailable"
+    elif not processed_fresh:
+        validation_text = "STALE - waiting for current data validation"
+    elif active_alerts or current_errors:
         titles = {field: title for _, field, title in METRIC_BOXES}
-        names = ", ".join(titles.get(f, f) for f in active_alerts)
-        validation_text = f"\u26a0 WARNING - out-of-range data: {names}"
-        validation_style = {
-            **validation_base_style,
-            "backgroundColor": "#f8d7da",
-            "color": "#842029",
-        }
-    elif processed_seen:
-        validation_text = "\u2713 Data validation: all channels in range"
-        validation_style = {
-            **validation_base_style,
-            "backgroundColor": "#d1e7dd",
-            "color": "#0f5132",
-        }
+        names = ", ".join(titles.get(f, f) for f in sorted(set(active_alerts) | current_errors))
+        validation_text = f"\u26a0 WARNING - invalid or out-of-range data: {names}"
     else:
-        validation_text = (
-            "Data validation: waiting for data_processing.py "
-            "(is it running?)"
-        )
-        validation_style = {
-            **validation_base_style,
-            "backgroundColor": "#e0e0e0",
-            "color": "#555555",
-        }
+        validation_text = "\u2713 Data validation: all channels in range"
+    healthy = validation_text.startswith("\u2713")
+    validation_style = {
+        **validation_base_style,
+        "backgroundColor": "#d1e7dd" if healthy else "#f8d7da",
+        "color": "#0f5132" if healthy else "#842029",
+    }
 
     return (
         f"{latest['throttle_percent']:.2f} %",
@@ -390,4 +430,9 @@ def update_dashboard(_):
 
 if __name__ == "__main__":
     print("Starting dashboard at http://127.0.0.1:8050")
-    app.run(debug=False, host="127.0.0.1", port=8050)
+    start_mqtt(mqtt_client, BROKER, PORT)
+    try:
+        app.run(debug=False, host="127.0.0.1", port=8050)
+    finally:
+        mqtt_client.disconnect()
+        mqtt_client.loop_stop()

@@ -8,7 +8,7 @@ from telemetry_packet import encode_fast_telemetry
 HOST = "localhost"
 PORT = 9000
 
-UPDATE_RATE_HZ = 10
+UPDATE_RATE_HZ = 100
 UPDATE_INTERVAL_SECONDS = 1 / UPDATE_RATE_HZ
 
 

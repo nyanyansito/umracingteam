@@ -105,4 +105,42 @@ The ESP32 calculates it again after receiving the packet.
 
 If the two CRC values do not match, the ESP32 rejects the packet.
 
-The exact CRC-16 variant will be finalized before implementation.
+The implemented variant is **CRC-16/CCITT-FALSE** (also called
+CRC-16/IBM-3740): polynomial `0x1021`, initial value `0xFFFF`, input and
+output reflection disabled, final XOR `0x0000`.
+
+Calculate the CRC over the complete header, including the start marker,
+followed by the payload. Append the CRC as a little-endian uint16.
+The standard check input ASCII `123456789` produces `0x29B1`.
+
+### Fixed interoperability vector
+
+For sequence `25`, timestamp `5000`, throttle `42.50%`, brake `75.25 bar`,
+steering `-18.5 degrees`, and speed `63.40 km/h`, the exact 22 wire bytes are:
+
+```text
+55 aa 01 01 08 00 19 00 88 13 00 00 9a 10 65 1d 47 ff c4 18 be d0
+```
+
+The marker value `0xAA55` therefore appears on the wire as **`55 AA`**.
+The final two bytes encode CRC `0xD0BE`. The header has no implicit C
+structure padding; use explicit little-endian serialization in firmware.
+Both firmware and Python must pass this vector before connecting devices.
+
+### Current implementation boundary
+
+Only type 1 (fast telemetry) is implemented by the Python UART codec and
+gateway. Types 2–4 are reserved; their binary payloads are not defined yet.
+GPS currently comes from a separate MQTT simulator. Do not send these
+reserved packet types to the current fast-only parser and expect dispatch.
+
+The uint16 sequence and uint32 millisecond timestamp wrap modulo `2^16`
+and `2^32`, respectively. MQTT publishers should include a `session_id`
+that changes on source restart. The simulated gateway also changes it on
+each TCP reconnection, because its STM32 simulator restarts on connection.
+This identifier is MQTT metadata; it does not change the 22-byte v1 packet.
+For publishers without session IDs, reboot inference from a zero sequence
+and regressing timestamp is best effort. Large backward jumps are treated
+as late packets, not enormous forward gaps. If firmware multiplexes future
+message types, define counter scope and implement dispatch before using
+per-topic loss counts.

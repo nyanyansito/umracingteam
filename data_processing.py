@@ -83,6 +83,8 @@ import json
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+from mqtt_runtime import run_mqtt
+from telemetry_validation import decode_object, is_number, is_uint, json_safe
 
 
 BROKER = "localhost"
@@ -110,6 +112,8 @@ PROCESSED_TOPIC_SUFFIX = "/processed"
 
 RANGE_OK = "ok"
 RANGE_OUT_OF_RANGE = "out_of_range"
+RANGE_INVALID = "invalid"
+RANGE_MISSING = "missing"
 
 # The channel sheet is expected to sit next to this file, in the repo
 # root, alongside dashboard.py / esp32_simulator.py / etc. The team has
@@ -304,6 +308,8 @@ def validate_range(value, min_value, max_value):
     for unbounded counters like packet_count) -- a None bound is
     treated as "no limit on that side" rather than failing the check.
     """
+    if not is_number(value):
+        return False
     if min_value is not None and value < min_value:
         return False
 
@@ -322,25 +328,40 @@ def process_fields(payload, field_names):
         even for out-of-range readings (flag-only policy).
       - range_flags: field -> "ok" | "out_of_range"
 
-    Fields missing from the payload, or not present in CHANNEL_SPECS
-    (e.g. a "planned" channel with no CSV range data yet), are skipped
-    rather than raising -- a partial/corrupted message, or a channel
-    that isn't implemented yet, shouldn't crash the pipeline.
+    Missing and invalid fields are flagged explicitly. Planned channels
+    without a specification are skipped. Finite out-of-range readings
+    remain unchanged.
     """
     processed_values = {}
     range_flags = {}
 
+    if not isinstance(payload, dict):
+        raise ValueError("Telemetry must be a JSON object")
     for field_name in field_names:
-        if field_name not in payload:
+        if field_name not in CHANNEL_SPECS:
             continue
 
-        if field_name not in CHANNEL_SPECS:
+        if field_name not in payload:
+            range_flags[field_name] = RANGE_MISSING
             continue
 
         value = payload[field_name]
         spec = CHANNEL_SPECS[field_name]
 
-        in_range = validate_range(value, spec["min_value"], spec["max_value"])
+        if field_name in ("online", "gps_valid"):
+            valid_type = type(value) is bool
+        else:
+            valid_type = is_number(value)
+            if field_name in ("lap_number", "packet_count", "decode_error_count", "dropped_count"):
+                valid_type = type(value) is int and is_number(value)
+
+        if not valid_type:
+            processed_values[field_name] = json_safe(value)
+            range_flags[field_name] = RANGE_INVALID
+            continue
+
+        in_range = validate_range(int(value) if type(value) is bool else value,
+                                  spec["min_value"], spec["max_value"])
 
         processed_values[field_name] = value
         range_flags[field_name] = RANGE_OK if in_range else RANGE_OUT_OF_RANGE
@@ -361,12 +382,21 @@ def build_processed_message(topic, payload):
 
     processed_values, range_flags = process_fields(payload, field_names)
 
+    for field, bits in (("sequence", 16), ("timestamp_ms", 32)):
+        if field in payload and not is_uint(payload[field], bits):
+            range_flags[field] = RANGE_INVALID
+        elif field not in payload and topic in (FAST_TOPIC, GPS_TOPIC):
+            range_flags[field] = RANGE_MISSING
+
     message = {
         "source_topic": topic,
         "values": processed_values,
         "range_flags": range_flags,
         "any_out_of_range": any(
             flag != RANGE_OK for flag in range_flags.values()
+        ),
+        "any_invalid_data": any(
+            flag in (RANGE_INVALID, RANGE_MISSING) for flag in range_flags.values()
         ),
         "limits": {
             field_name: {
@@ -380,11 +410,14 @@ def build_processed_message(topic, payload):
     # Only included when the source payload actually has them, so a
     # lap/status message (which never carries a sequence number) never
     # ends up publishing "sequence": None downstream.
-    if "sequence" in payload:
+    if is_uint(payload.get("sequence"), 16):
         message["sequence"] = payload["sequence"]
 
-    if "timestamp_ms" in payload:
+    if is_uint(payload.get("timestamp_ms"), 32):
         message["timestamp_ms"] = payload["timestamp_ms"]
+
+    if isinstance(payload.get("session_id"), str):
+        message["session_id"] = payload["session_id"]
 
     return message
 
@@ -398,9 +431,9 @@ def verify_passthrough(raw_payload, processed_message):
     """Confirm that every value in the processed message exactly
     matches the corresponding raw payload value.
 
-    Under the flag-only range policy, this should ALWAYS be True --
-    if it isn't, processing has silently altered a value, which is
-    exactly what the Week 3 accuracy check needs to catch.
+    For finite numeric readings this should always be True. Invalid
+    nonfinite numbers are represented as null in processed JSON; the
+    lossless session recording preserves their original wire payload.
     """
     for field_name, processed_value in processed_message["values"].items():
         if raw_payload.get(field_name) != processed_value:
@@ -425,8 +458,8 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 def on_message(client, userdata, message):
     try:
-        payload = json.loads(message.payload.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = decode_object(message.payload)
+    except (ValueError, UnicodeDecodeError):
         print("Data processor received an invalid message")
         return
 
@@ -437,7 +470,7 @@ def on_message(client, userdata, message):
 
     client.publish(
         message.topic + PROCESSED_TOPIC_SUFFIX,
-        json.dumps(processed_message),
+        json.dumps(processed_message, allow_nan=False),
         qos=0,
     )
 
@@ -463,13 +496,4 @@ if __name__ == "__main__":
     client.on_connect = on_connect
     client.on_message = on_message
 
-    try:
-        client.connect(BROKER, PORT)
-        client.loop_forever()
-
-    except KeyboardInterrupt:
-        print()
-        print("Data processor stopped")
-
-    finally:
-        client.disconnect()
+    run_mqtt(client, BROKER, PORT)

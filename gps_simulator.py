@@ -1,8 +1,10 @@
 import json
 import math
 import time
+import uuid
 
 import paho.mqtt.client as mqtt
+from mqtt_runtime import start_mqtt
 
 
 BROKER = "localhost"
@@ -49,7 +51,7 @@ def generate_gps(sequence, elapsed_seconds):
 
     return {
         "sequence": sequence,
-        "timestamp_ms": int(elapsed_seconds * 1000),
+        "timestamp_ms": int(elapsed_seconds * 1000) % (1 << 32),
         "latitude": round(latitude, 7),
         "longitude": round(longitude, 7),
         "gps_speed_kmh": round(speed_kmh, 2),
@@ -57,45 +59,52 @@ def generate_gps(sequence, elapsed_seconds):
     }
 
 
-client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2,
-    client_id="umf1-gps-simulator"
-)
 
-client.connect(BROKER, PORT)
-client.loop_start()
+def main():
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id="umf1-gps-simulator"
+    )
 
-print("GPS simulator started")
-print(f"Publishing to {TOPIC}")
-print("Press Control + C to stop")
+    start_mqtt(client, BROKER, PORT)
 
-start_time = time.monotonic()
-sequence = 0
+    print("GPS simulator started")
+    print(f"Publishing to {TOPIC}")
+    print("Press Control + C to stop")
 
-try:
-    while True:
-        elapsed = time.monotonic() - start_time
-        gps_data = generate_gps(sequence, elapsed)
+    start_time = time.monotonic()
+    sequence = 0
+    session_id = uuid.uuid4().hex
 
-        client.publish(
-            TOPIC,
-            json.dumps(gps_data),
-        )
+    try:
+        while True:
+            elapsed = time.monotonic() - start_time
+            gps_data = generate_gps(sequence, elapsed)
+            gps_data["session_id"] = session_id
 
-        print(
-            f"GPS {sequence}: "
-            f"lat={gps_data['latitude']}, "
-            f"lon={gps_data['longitude']}, "
-            f"speed={gps_data['gps_speed_kmh']} km/h"
-        )
+            client.publish(
+                TOPIC,
+                json.dumps(gps_data),
+            )
 
-        sequence = (sequence + 1) % 65536
-        time.sleep(UPDATE_INTERVAL_SECONDS)
+            print(
+                f"GPS {sequence}: "
+                f"lat={gps_data['latitude']}, "
+                f"lon={gps_data['longitude']}, "
+                f"speed={gps_data['gps_speed_kmh']} km/h"
+            )
 
-except KeyboardInterrupt:
-    print()
-    print("GPS simulator stopped")
+            sequence = (sequence + 1) % 65536
+            time.sleep(UPDATE_INTERVAL_SECONDS)
 
-finally:
-    client.loop_stop()
-    client.disconnect()
+    except KeyboardInterrupt:
+        print()
+        print("GPS simulator stopped")
+
+    finally:
+        client.loop_stop()
+        client.disconnect()
+
+
+if __name__ == "__main__":
+    main()

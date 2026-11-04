@@ -3,6 +3,8 @@ import json
 import paho.mqtt.client as mqtt
 
 from sequence_tracker import SequenceTracker
+from mqtt_runtime import run_mqtt
+from telemetry_validation import decode_object
 
 
 BROKER = "localhost"
@@ -34,7 +36,7 @@ def check_sequence(topic, data):
         sequence_trackers[topic] = SequenceTracker()
 
     result = sequence_trackers[topic].check(
-        data["sequence"]
+        data["sequence"], data.get("timestamp_ms"), data.get("session_id")
     )
 
     if result["status"] == "gap":
@@ -67,38 +69,20 @@ def check_sequence(topic, data):
 
 
 def on_message(client, userdata, message):
-    text = message.payload.decode("utf-8")
-
-    print()
-    print(f"Topic: {message.topic}")
-
     try:
-        data = json.loads(text)
-
+        data = decode_object(message.payload)
         check_sequence(message.topic, data)
-
-        print(f"Data: {data}")
-
-    except json.JSONDecodeError:
-        print(f"Message: {text}")
+        print(f"{message.topic}: {data}")
+    except (ValueError, UnicodeDecodeError):
+        print(f"Invalid telemetry on {message.topic}")
 
 
-client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2,
-    client_id="umf1-python-subscriber"
-)
+def main():
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="umf1-python-subscriber")
+    client.on_connect = on_connect
+    client.on_message = on_message
+    run_mqtt(client, BROKER, PORT)
 
-client.on_connect = on_connect
-client.on_message = on_message
 
-client.connect(BROKER, PORT)
-
-try:
-    client.loop_forever()
-
-except KeyboardInterrupt:
-    print()
-    print("Subscriber stopped")
-
-finally:
-    client.disconnect()
+if __name__ == "__main__":
+    main()
