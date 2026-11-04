@@ -388,5 +388,59 @@ class VerifyPassthroughTests(unittest.TestCase):
         self.assertFalse(verify_passthrough(raw_payload, message))
 
 
+class LimitsAndStatusTopicTests(unittest.TestCase):
+
+    def test_processed_message_carries_limits_for_each_field(self):
+        payload = {
+            "throttle_percent": 300.0,
+            "brake_bar": 0.0,
+            "steering_degrees": 0.0,
+            "speed_kmh": 10.0,
+        }
+
+        message = build_processed_message(FAST_TOPIC, payload)
+
+        self.assertEqual(
+            message["limits"]["throttle_percent"], {"min": 0, "max": 100}
+        )
+        self.assertEqual(
+            message["limits"]["steering_degrees"], {"min": -45, "max": 45}
+        )
+
+    def test_limits_do_not_change_the_values(self):
+        payload = {
+            "throttle_percent": 300.0,
+            "brake_bar": 0.0,
+            "steering_degrees": 0.0,
+            "speed_kmh": 10.0,
+        }
+
+        message = build_processed_message(FAST_TOPIC, payload)
+
+        self.assertTrue(verify_passthrough(payload, message))
+
+    def test_real_gateway_status_topic_is_validated(self):
+        # esp32_simulator.py publishes its counters to gateway/status.
+        self.assertEqual(
+            GATEWAY_STATUS_TOPIC, "umf1/car01/gateway/status"
+        )
+
+        message = build_processed_message(
+            GATEWAY_STATUS_TOPIC,
+            {"online": True, "packet_count": 10, "dropped_count": -1},
+        )
+
+        self.assertEqual(message["values"]["packet_count"], 10)
+        # a negative dropped_count is impossible -> must be flagged
+        self.assertEqual(
+            message["range_flags"]["dropped_count"], RANGE_OUT_OF_RANGE
+        )
+
+    def test_manual_status_topic_still_handled(self):
+        message = build_processed_message(STATUS_TOPIC, {"online": True})
+
+        self.assertEqual(message["values"], {"online": True})
+
+
 if __name__ == "__main__":
     unittest.main()

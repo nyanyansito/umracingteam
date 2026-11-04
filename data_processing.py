@@ -58,15 +58,24 @@ validate. Once a simulator starts publishing one, add its wire field
 name to WIRE_FIELD_TO_CSV_CHANNEL_NAME (and to TOPIC_FIELDS below) and
 it will start being picked up from the CSV with no other changes.
 
-Status topic
-------------
-esp32_simulator.py publishes gateway link-up state (online) AND
-gateway counters (packet_count, decode_error_count, dropped_count)
-together, in a single JSON message, to one topic: umf1/car01/status.
-There is no separate "gateway/status" topic published anywhere in the
-pipeline -- channellist.csv's mqtt_topic column for those rows was
-corrected to reflect this. TOPIC_FIELDS below lists all four fields
-under that one topic to match.
+Status topics
+-------------
+Two different scripts publish status messages, to two different topics:
+  - esp32_simulator.py publishes the REAL gateway status (online plus the
+    counters packet_count, decode_error_count, dropped_count) to
+    umf1/car01/gateway/status.
+  - mqtt_publisher.py is a small manual test script that publishes just
+    {"online": true} to umf1/car01/status.
+Both topics are validated here (TOPIC_FIELDS below). The CSV's mqtt_topic
+column for the four status channels points at gateway/status because
+that is where the real data comes from.
+
+Limits in the processed message
+-------------------------------
+Every processed message also carries a "limits" entry ({field: {"min":
+.., "max": ..}}) for each validated field, so a display (the dashboard)
+can say *why* a value was flagged, e.g. "300 is outside 0 to 100",
+without having to read the CSV itself.
 """
 
 import csv
@@ -83,7 +92,8 @@ PORT = 1883
 FAST_TOPIC = "umf1/car01/telemetry/fast"
 GPS_TOPIC = "umf1/car01/telemetry/gps"
 LAP_TOPIC = "umf1/car01/telemetry/lap"
-STATUS_TOPIC = "umf1/car01/status"
+STATUS_TOPIC = "umf1/car01/status"  # manual test publisher (mqtt_publisher.py)
+GATEWAY_STATUS_TOPIC = "umf1/car01/gateway/status"  # real ESP32 gateway status
 
 # Each source topic gets its own processed topic (source topic +
 # "/processed"), rather than one shared topic for everything.
@@ -101,10 +111,22 @@ PROCESSED_TOPIC_SUFFIX = "/processed"
 RANGE_OK = "ok"
 RANGE_OUT_OF_RANGE = "out_of_range"
 
-# channellist.csv is expected to sit next to this file, in the repo
-# root, alongside dashboard.py / esp32_simulator.py / etc.
-CSV_FILENAME = "channellist.csv"
-CSV_PATH = Path(__file__).resolve().parent / CSV_FILENAME
+# The channel sheet is expected to sit next to this file, in the repo
+# root, alongside dashboard.py / esp32_simulator.py / etc. The team has
+# used both "channellist.csv" and "channel-list.csv" as its name, so
+# either one is accepted (the first that exists wins) -- a file-name
+# mix-up should never stop the pipeline.
+CSV_FILENAME_CANDIDATES = ("channellist.csv", "channel-list.csv")
+_REPO_ROOT = Path(__file__).resolve().parent
+CSV_PATH = next(
+    (
+        _REPO_ROOT / name
+        for name in CSV_FILENAME_CANDIDATES
+        if (_REPO_ROOT / name).exists()
+    ),
+    _REPO_ROOT / CSV_FILENAME_CANDIDATES[0],
+)
+CSV_FILENAME = CSV_PATH.name
 
 
 # ---------------------------------------------------------------------
@@ -151,7 +173,8 @@ TOPIC_FIELDS = {
     FAST_TOPIC: ["throttle_percent", "brake_bar", "steering_degrees", "speed_kmh"],
     GPS_TOPIC: ["latitude", "longitude", "gps_speed_kmh", "gps_valid"],
     LAP_TOPIC: ["lap_number", "lap_time_seconds"],
-    STATUS_TOPIC: [
+    STATUS_TOPIC: ["online"],
+    GATEWAY_STATUS_TOPIC: [
         "online",
         "packet_count",
         "decode_error_count",
@@ -241,7 +264,8 @@ try:
     CHANNEL_SPECS = build_channel_specs()
 except FileNotFoundError:
     raise FileNotFoundError(
-        f"Could not find {CSV_FILENAME} at {CSV_PATH}. "
+        f"Could not find the channel sheet. Looked for "
+        f"{' or '.join(CSV_FILENAME_CANDIDATES)} in {_REPO_ROOT}. "
         f"data_processing.py expects channellist.csv in the same "
         f"folder as this script (the repo root)."
     )
@@ -344,6 +368,13 @@ def build_processed_message(topic, payload):
         "any_out_of_range": any(
             flag != RANGE_OK for flag in range_flags.values()
         ),
+        "limits": {
+            field_name: {
+                "min": CHANNEL_SPECS[field_name]["min_value"],
+                "max": CHANNEL_SPECS[field_name]["max_value"],
+            }
+            for field_name in processed_values
+        },
     }
 
     # Only included when the source payload actually has them, so a
