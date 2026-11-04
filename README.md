@@ -17,7 +17,37 @@ python -m pip install -r requirements.txt
 ```
 
 Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
-Run each program below in its own terminal, from the repository root:
+
+### Start everything with one command
+
+Activate your virtual environment, then run:
+
+```sh
+python run_telemetry.py
+```
+
+This starts the STM32 link simulator, ESP32 gateway, GPS simulator, lap timer,
+logger, processor and dashboard using the same Python interpreter. Open
+http://127.0.0.1:8050. Press Ctrl+C in the launcher terminal to stop them together.
+Close any individually running copies of these scripts first.
+
+The launcher reuses a broker already listening on localhost:1883, including a
+Mosquitto Windows service. Otherwise it starts Mosquitto from PATH or its normal
+Windows installation folder. It only stops the broker if it started that broker.
+If you installed Mosquitto elsewhere, use PowerShell:
+
+```powershell
+python run_telemetry.py --mosquitto-path "C:\Program Files\mosquitto\mosquitto.exe"
+```
+
+Each process writes a separate log under `logs/launcher_<session>/`. If a program
+exits unexpectedly, the launcher reports its log file and stops the other owned
+processes. Add `--subscriber` to include packet diagnostics. Replay, fake-data
+injection and standalone print demos are intentionally separate commands.
+
+### Start programs individually
+
+For debugging, run each program below in its own terminal, from the repository root:
 
 ```text
 mosquitto
