@@ -1,7 +1,8 @@
-"""Record every car topic losslessly, alongside a compatible fast-data CSV."""
+"""Record telemetry losslessly; derived lap display traffic is opt-in."""
 import base64
 import csv
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -11,8 +12,7 @@ import paho.mqtt.client as mqtt
 from mqtt_runtime import run_mqtt
 from telemetry_validation import decode_object, json_safe, validate_fast_sample
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TOPIC = "umf1/car01/#"
 FAST_TOPIC = "umf1/car01/telemetry/fast"
 FIELD_NAMES = ["sequence", "timestamp_ms", "throttle_percent", "brake_bar",
@@ -20,7 +20,8 @@ FIELD_NAMES = ["sequence", "timestamp_ms", "throttle_percent", "brake_bar",
 
 
 class SessionLogger:
-    def __init__(self, folder="logs"):
+    def __init__(self, folder="logs", include_lap_state=False):
+        self.include_lap_state = include_lap_state
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
         name = "telemetry_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -37,6 +38,11 @@ class SessionLogger:
         self.csv_file.flush()
 
     def record(self, message):
+        # The lap service can regenerate display snapshots from recorded GPS and
+        # inputs. Re-recording full reference arrays every two seconds wastes GBs
+        # over a long stint; opt in only when diagnosing the state protocol.
+        if "/telemetry/lap/" in message.topic and not self.include_lap_state:
+            return
         received_time_ns = time.time_ns()
         record = {
             "received_time_ns": received_time_ns,
@@ -79,7 +85,7 @@ def on_message(client, userdata, message):
 
 
 def main():
-    logger = SessionLogger()
+    logger = SessionLogger(include_lap_state=os.environ.get("UMR_LOG_LAP_STATE") == "1")
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                          client_id="umf1-telemetry-logger", userdata=logger)
     client.on_connect = on_connect

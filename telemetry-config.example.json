@@ -1,0 +1,38 @@
+{
+  "broker": {
+    "host": "localhost",
+    "port": 1883
+  },
+  "state_file": "logs/lap-session.json",
+  "track": {
+    "id": "red_bull_ring",
+    "finish_start": [
+      14.765203877152953,
+      47.21980594706409
+    ],
+    "finish_end": [
+      14.765034122847048,
+      47.22024005293591
+    ],
+    "minimum_lap_seconds": 20,
+    "minimum_lap_distance_m": 3445.8,
+    "minimum_departure_m": 50,
+    "checkpoints": [
+      [
+        14.755957,
+        47.224828,
+        60
+      ],
+      [
+        14.764321,
+        47.225044,
+        60
+      ],
+      [
+        14.763261,
+        47.223126,
+        60
+      ]
+    ]
+  }
+}

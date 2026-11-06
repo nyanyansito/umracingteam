@@ -1,43 +1,30 @@
-# UM F1 Pit-Wall Telemetry Architecture
+# Telemetry architecture
 
-## Data Flow
+```text
+STM32 simulator -> binary TCP/UART stand-in -> ESP32 gateway -> MQTT fast stream
+GPS simulator --------------------------------------------> MQTT GPS stream
+                                                               |
+                 +---------------------+-----------------------+
+                 |                     |                       |
+          Data processor        Lap analysis service     Lossless logger
+          range/shape flags     (python lap_timer.py)    CSV + topic JSONL
+                 |              timing, checkpoints,
+                 |              input alignment, delta,
+                 |              persisted references
+                 |                     |
+                 +-------> Live Dash dashboard <----- snapshots + appends
+                           100 Hz rolling input data
+                           10 Hz sensor display updates
+                           5 Hz lap/map display updates
+                           local animated clock
+```
 
-Sensors → STM32 → UART → ESP32 → Wi-Fi/MQTT → Mosquitto → Python → Graphical Software
+Only the lap service owns timing and lap numbering. The dashboard is a subscriber;
+late viewers receive a coherent snapshot and recover missed appends explicitly.
+Completed laps are atomically saved; partial laps re-arm after service restart.
 
-## Component Responsibilities
-
-### STM32
-
-- Read vehicle sensors
-- Apply sensor calibration
-- Add timestamps
-- Create telemetry packets
-- Send packets to the ESP32 through UART
-
-### ESP32
-
-- Receive UART packets from the STM32
-- Check that packets are valid
-- Connect to the pit-wall Wi-Fi
-- Publish telemetry to the MQTT broker
-
-### Mosquitto
-
-- Run on the pit-wall laptop
-- Receive MQTT messages
-- Deliver messages to subscribed programs
-
-### Python Bridge
-
-- Subscribe to MQTT topics
-- Decode telemetry messages
-- Detect missing or invalid data
-- Save session logs
-- Provide data to the graphical software
-
-### Graphical Software
-
-- Display live telemetry
-- Show graphs
-- Display lap and sector times
-- Support post-session analysis
+The launcher provides a shared clock origin/session ID to both simulators.
+Hardware must provide the same acquisition clock/boot identity across fast and GPS
+streams, or embed synchronised driver inputs with GPS. Physical serial/firmware
+backends and sensor calibration remain hardware integration work. Use the JSON
+configuration for the actual circuit and broker.

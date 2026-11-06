@@ -13,8 +13,7 @@ import paho.mqtt.client as mqtt
 from mqtt_runtime import start_mqtt
 from telemetry_validation import validate_fast_sample
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TOPIC = "umf1/car01/telemetry/fast"
 
 
@@ -39,7 +38,8 @@ def replay_records(file_path, all_topics=False):
             for line in source:
                 record = json.loads(line)
                 topic = record["topic"]
-                if not all_topics and (topic.endswith("/processed") or topic.endswith("/telemetry/lap")):
+                if not all_topics and (topic.endswith("/processed") or topic.endswith("/telemetry/lap")
+                                       or "/telemetry/lap/" in topic):
                     continue
                 yield (record["received_monotonic_ns"] / 1_000_000, topic,
                        base64.b64decode(record["payload_base64"], validate=True), record["qos"])

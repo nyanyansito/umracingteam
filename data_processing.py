@@ -87,8 +87,7 @@ from mqtt_runtime import run_mqtt
 from telemetry_validation import decode_object, is_number, is_uint, json_safe
 
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 
 # Raw topics this module subscribes to.
 FAST_TOPIC = "umf1/car01/telemetry/fast"
@@ -418,6 +417,9 @@ def build_processed_message(topic, payload):
 
     if isinstance(payload.get("session_id"), str):
         message["session_id"] = payload["session_id"]
+
+    if is_uint(payload.get("wall_time_ms"), 64):
+        message["wall_time_ms"] = payload["wall_time_ms"]
 
     return message
 

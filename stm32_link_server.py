@@ -5,8 +5,7 @@ from stm32_simulator import generate_telemetry
 from telemetry_packet import encode_fast_telemetry
 
 
-HOST = "localhost"
-PORT = 9000
+from telemetry_config import STM32_HOST as HOST, STM32_PORT as PORT
 
 UPDATE_RATE_HZ = 100
 UPDATE_INTERVAL_SECONDS = 1 / UPDATE_RATE_HZ

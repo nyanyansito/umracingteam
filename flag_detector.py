@@ -17,8 +17,7 @@ import sys
 import paho.mqtt.client as mqtt
 
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 
 DEFAULT_TOPIC = "umf1/car01/telemetry/fast/processed"
 topic = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TOPIC

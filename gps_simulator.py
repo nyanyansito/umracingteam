@@ -2,13 +2,13 @@ import json
 from simulated_track import sample_track
 from simulation_clock import SimulationClock
 import uuid
+import os
 
 import paho.mqtt.client as mqtt
 from mqtt_runtime import start_mqtt
 
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TOPIC = "umf1/car01/telemetry/gps"
 
 UPDATE_RATE_HZ = 10
@@ -26,6 +26,8 @@ def generate_gps(sequence, elapsed_seconds):
         "track_id": "red_bull_ring",
         "throttle_percent": sample["throttle_percent"],
         "brake_bar": sample["brake_bar"],
+        "steering_degrees": sample["steering_degrees"],
+        "speed_kmh": sample["speed_kmh"],
     }
 
 
@@ -43,7 +45,7 @@ def main():
 
     clock = SimulationClock(UPDATE_INTERVAL_SECONDS)
     sequence = 0
-    session_id = uuid.uuid4().hex
+    session_id = os.environ.get("UMR_SIM_SESSION_ID") or uuid.uuid4().hex
 
     try:
         while True:

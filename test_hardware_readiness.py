@@ -20,6 +20,7 @@ from sequence_tracker import SequenceTracker
 from telemetry_logger import SessionLogger
 from telemetry_packet import calculate_crc, encode_fast_telemetry, decode_fast_telemetry
 from telemetry_validation import FAST_FIELDS
+from sample_order import SampleOrder
 
 SAMPLE = {"sequence": 25, "timestamp_ms": 5000, "throttle_percent": 42.5,
           "brake_bar": 75.25, "steering_degrees": -18.5, "speed_kmh": 63.4}
@@ -80,6 +81,12 @@ class DashboardTests(unittest.TestCase):
         dashboard.gateway_status = None
         dashboard.last_gateway_time = None
         dashboard.alert_tracker = AlertTracker()
+        dashboard.sample_order = SampleOrder()
+        dashboard.processed_key = None
+        dashboard.source_offset = None
+        dashboard.receive_times.clear()
+        dashboard.history_revision = 0
+        dashboard.history_generation = 0
 
     @staticmethod
     def histories():
@@ -87,9 +94,11 @@ class DashboardTests(unittest.TestCase):
                 dashboard.steering_history, dashboard.speed_history)
 
     def healthy(self, now=0):
+        sample = {**SAMPLE, "sequence": SAMPLE["sequence"] + round(now * 100),
+                  "timestamp_ms": SAMPLE["timestamp_ms"] + round(now * 1000)}
         with patch("time.monotonic", return_value=now):
-            dashboard.on_message(None, None, message(SAMPLE))
-            dashboard.on_processed_message(None, None, message(dp.build_processed_message(dp.FAST_TOPIC, SAMPLE)))
+            dashboard.on_message(None, None, message(sample))
+            dashboard.on_processed_message(None, None, message(dp.build_processed_message(dp.FAST_TOPIC, sample)))
 
     def status(self, now):
         with patch("time.monotonic", return_value=now):
@@ -108,7 +117,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("all channels in range", self.status(0))
         self.assertIn("STALE", self.status(3))
         with patch("time.monotonic", return_value=3):
-            dashboard.on_message(None, None, message(SAMPLE))
+            dashboard.on_message(None, None, message({**SAMPLE, "sequence": 325, "timestamp_ms": 8000}))
         self.assertIn("validation", self.status(3))
         self.assertNotIn("all channels in range", self.status(3))
 

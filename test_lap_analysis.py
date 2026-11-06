@@ -144,10 +144,16 @@ class LapDashboardTests(unittest.TestCase):
         callback = next(dep for dep in deps if "lap-metrics" in dep["output"])
         outputs = [{"id": name, "property": prop} for name, prop in (
             ("lap-metrics", "children"), ("lap-status", "children"),
-            ("track-trace", "figure"), ("lap-delta-graph", "figure"), ("lap-history", "children"))]
+            ("track-trace", "figure"), ("lap-delta-graph", "figure"), ("lap-history", "children"), ("lap-view-state", "data"),
+            ("lap-input-graphs", "figure"), ("input-view-state", "data"), ("reference-choice", "options"))]
         response = client.post("/_dash-update-component", json={
             "output": callback["output"], "outputs": outputs,
-            "inputs": [{"id": "lap-update", "property": "n_intervals", "value": 0}],
+            "inputs": [{"id": "lap-update", "property": "n_intervals", "value": 0},
+                       {"id": "track-colour", "property": "value", "value": "inputs"},
+                       {"id": "inspection", "property": "data", "value": None},
+                       {"id": "return-live", "property": "n_clicks", "value": 0}],
+            "state": [{"id": "lap-view-state", "property": "data", "value": None},
+                      {"id": "input-view-state", "property": "data", "value": None}],
             "changedPropIds": ["lap-update.n_intervals"],
         })
         self.assertEqual(response.status_code, 200)

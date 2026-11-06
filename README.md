@@ -77,7 +77,9 @@ samples; `any_out_of_range` remains the compatibility summary for any bad flag.
 Invalid sequence/timestamp metadata is flagged and omitted from processed output.
 
 The dashboard updates all history channels together only after checking a
-complete sample. It keeps 1,000 samples (about ten seconds at the 100 Hz target).
+complete, advancing sample. Duplicates and late packets do not refresh freshness.
+Validation must match the displayed sample's session, sequence and timestamp before
+it can show a healthy result. It keeps 1,000 samples (about ten seconds at the 100 Hz target).
 Raw data and validation expire after two seconds without updates. Gateway
 status expires after three seconds. An alert timing out cannot turn stale data
 green. Metric values remain visible as the last known values under the status
@@ -90,84 +92,120 @@ The broker's retained offline last will reports gateway connection loss.
 `packet_count` counts telemetry accepted by the local MQTT client, not confirmed
 pit-wall delivery (fast telemetry uses QoS 0).
 
-## Lap timing
+## Lap timing and live analysis
 
-The first valid directional finish-line crossing establishes a baseline;
-the next eligible crossing completes the first lap. Crossing times are
-interpolated between fixes. Invalid fixes, gaps over one second in GPS source
-timestamps, implausible position jumps, and source resets discard continuity.
-Late delivery of otherwise consecutive source samples does not reset the lap.
-Timing re-arms at the next crossing; incomplete laps are not published.
-The current finish line is for the Red Bull Ring simulator.
-Set `FINISH_LINE_START`, `FINISH_LINE_END` and `MINIMUM_LAP_TIME_SECONDS` in
-`lap_timer.py` for the actual track. The direction is from the negative side
-to the nonnegative side of the directed start-to-end line.
+`python lap_timer.py` starts the single authoritative lap service. It owns lap
+numbering, current lap time, best/reference laps, GPS continuity and completed-lap
+storage. The dashboard subscribes to this service; it no longer starts a separate
+lap counter. A viewer can join halfway through a session and see the same lap
+numbers and reference as the logger and other viewers.
 
-## Live lap dashboard
+A lap begins at a directional finish-line crossing. A completed lap must also
+meet the minimum duration, minimum travelled distance, minimum departure from the
+finish, and all ordered checkpoints. The bundled Red Bull Ring configuration uses
+three checkpoints and an 80 percent circuit-distance minimum. This prevents GPS
+jitter at the finish from creating a stationary best lap and rejects skipped
+checkpoints. Rejected crossings re-arm timing and display a reason; they cannot
+become a reference. Out-laps and interrupted laps are not eligible.
 
-The dashboard now includes current lap number and elapsed time, last/best lap,
-live delta, a GPS track trace with the current position, a completed-lap table,
-and a delta-versus-reference-distance graph. The trace uses local east/north
-coordinates in metres, so it works offline without map tiles or an API key.
-The first full uninterrupted lap captured by the dashboard becomes the reference;
-a faster complete lap replaces it automatically. Negative delta means faster,
-positive means slower. The stacked list shows lap number, time, GPS top speed
-and delta against the current session best. All row deltas update when a new
-best is set. A session-best row and BEST badge identify the fastest lap.
-The session top-speed card includes valid out-lap samples as well.
+Invalid GPS fixes, source gaps over one second, implausible jumps and broker
+disconnects discard the partial lap. Completed laps survive interruptions.
+Duplicate and late packets are ignored. A new, valid source session ID starts a
+new session; delayed packets from retired sessions cannot switch it back. Legacy
+sources without a session ID must reset their sequence to zero on reboot.
+Counter rollover is unwrapped instead of looking like a restart.
 
-The track trace shows throttle in green, braking in red (takes priority when
-both pedals are applied), and coasting in grey. Dark sections have no synchronized
-input data. Current-lap colours overlay the best complete lap. Simulator GPS
-messages include throttle and brake sampled at that exact position; the map does
-not match independently started fast-telemetry timestamps to GPS. Hardware should
-likewise publish synchronized `throttle_percent` and `brake_bar` with each GPS fix
-to enable these colours. Brake over 1 bar counts as braking; throttle over 5 percent
-counts as throttle when braking is inactive.
+Delta projects the current GPS fix onto the reference and compares elapsed times
+at that distance. Negative is faster. Matching can reacquire after an excursion,
+but leaves delta unavailable when candidate sections are ambiguous or farther
+than 20 metres away. Missing comparisons create gaps in the delta graph.
 
-Lap calculations run in the dashboard using the same `LapTimer` implementation
-as the standalone lap publisher; the dashboard does not need the standalone
-publisher to display lap timing. It must receive live GPS messages and observe
-two directional finish crossings before it can record its first complete lap.
-The simulator follows a bundled Red Bull Ring centreline in Spielberg, Austria.
-It starts just before the finish: timing arms after about one second, with the
-first complete reference after roughly 2.5 minutes. The full circuit outline
-appears as soon as simulator GPS arrives. Speeds vary through corners and
-straights, and successive laps vary by up to two percent. Fast telemetry and
-GPS use the same synthetic driving profile at a given elapsed time, but their
-independent process start times can offset their phases. This is a club-car
-test profile within the existing 120 km/h sensor limits, not F1 physics.
+## Dashboard controls
+
+The dashboard provides:
+
+- Current, last and best lap times, live delta, GPS top speeds and a lap table.
+- A GPS track trace with distinct current/reference lines. Colour the current
+  trace by pedal activity, speed, throttle or brake pressure.
+- Full-lap throttle, brake, steering and speed plots, aligned to reference
+  distance, with reference traces underneath the live lap.
+- A rolling 1,000-sample sensor view (about 10 seconds at 100 Hz), updated at
+  10 Hz using incremental appends. Sequence gaps and restarts break/reset traces.
+  Display limits come from the channel sheet and expand to keep excursions visible.
+- Linked inspection: hover a lap-input or delta graph to mark that position on
+  the map; hover a mapped segment to place a shared cursor on the plots.
+  Zoom survives updates. **Return to live** clears inspection and restores the view.
+- A reference selector: session best automatically, or any stored completed lap.
+  Selection is shared by viewers of this car/session. Selecting another reference
+  never changes the session-best time or the table's deltas against that best.
+
+The lap plots and map refresh at up to 5 Hz. Each refresh waits for the
+previous request to finish, so slow browsers/networks cannot create an endless
+queue of superseded results. The clock receives anchors at 10 Hz and
+animates locally, extrapolating at most 150 ms beyond the latest GPS fix.
+Millisecond digits are an interpolation estimate, not millisecond GPS accuracy.
+A stale display freezes the clock and hides live delta.
+
+The lap service publishes compact append updates at 10 Hz and a retained full
+snapshot every two seconds, at lap boundaries, and when requested by a viewer.
+A missing update causes that viewer to request a snapshot and pause its live
+indication until recovered. A retained snapshot alone never proves liveness.
+The service measures GPS age from arrival time and observed source-clock progress,
+so a delayed backlog is not presented as current. Initial absolute one-way latency
+cannot be determined without clock synchronisation between the car and pit wall.
+
+## Input synchronisation and simulation
+
+Use `python run_telemetry.py` for simulation. The launcher gives the STM32 and GPS
+simulators the same monotonic clock origin and session ID. Their samples therefore
+refer to the same car position even when the processes start at different times.
+Host stalls skip source samples rather than independently slowing the two clocks;
+a real gap can invalidate a simulated lap. The isolated `SimulationClock` fixture
+still supports a paced virtual clock when no shared origin is configured.
+
+GPS simulator messages carry throttle, brake, steering and speed sampled at the
+fix's position. The lap service also supports hardware GPS messages without these
+channels: it can attach a fast sample within 150 ms **only when both messages have
+the same session ID and acquisition timestamp domain**. Embedded GPS-synchronised
+inputs take precedence. Missing or unsynchronised inputs remain unavailable.
+Do not reuse a boot ID with a reset clock.
+
+Full-lap input comparisons currently use the GPS-aligned samples (10 Hz in the
+simulator). The rolling input graphs and recordings preserve the faster 100 Hz
+stream; they should be used when inspecting events shorter than a GPS interval.
+The map uses green for throttle, red for braking (priority when both apply), grey
+for coasting and dark grey for unknown input. Brake over 1 bar and throttle over
+5 percent define these modes. Numeric colour modes expose the actual magnitudes.
+
+The simulator follows the bundled Red Bull Ring centreline in Austria, starts
+just before the finish, and establishes a complete reference after approximately
+2.5 minutes. It uses a club-car profile within the 120 km/h limits, not F1 physics.
 Circuit data: https://github.com/bacinger/f1-circuits/blob/master/circuits/at-1969.geojson
-(MIT licence and attribution included in `tracks/LICENSE.md`).
+(MIT licence and attribution in `tracks/LICENSE.md`).
 
-Delta is calculated by projecting the current GPS position onto nearby forward
-segments of the reference and interpolating the reference's elapsed time there.
-It is unavailable before a complete reference exists or when the position is
-more than 20 m from a plausible reference segment. GPS source gaps over one second,
-invalid fixes and broker disconnects invalidate the current lap. Completed laps
-remain available across GPS dropouts, but a source restart clears the session.
-The dashboard keeps up to 50 completed-lap results in memory; restart/reload of
-the Python dashboard clears this analysis state. A browser refresh does not.
+## Persistence and deployment configuration
 
-A stale display freezes the last known lap time and hides delta; refreshing the
-page never clears an active lap. Chart refresh rates are 4 Hz for the lap panel
-and 2 Hz for sensor histories, independently of data reception. The simulators
-use a paced virtual clock: host scheduling pauses freeze simulated time instead
-of teleporting the car forward or emitting a catch-up flood of packets. On a slow
-machine simulated lap duration can therefore exceed its nominal wall-clock time.
+Completed lap summaries, GPS/input traces, best lap and reference selection are
+saved atomically to `logs/lap-session.json`. Up to 50 recent completed laps are
+kept, plus the best/selected reference if older. Restarting the lap service restores
+these for the same source session and track; the partial lap must re-arm at the
+next finish crossing. Browser refreshes do not affect timing. Raw recordings still
+provide the full session history.
 
-The main lap clock and current lap's table time animate locally in the browser
-using requestAnimationFrame. A lightweight anchor updates independently at 10 Hz,
-with interpolation limited to 150 ms beyond the latest GPS time. This removes
-visible tenth-second steps without redrawing charts at animation speed. Millisecond
-display digits are an estimate between fixes, not millisecond measurement accuracy.
-If updates stop, interpolation is capped and the timer freezes. Completed lap
-results always use the source timestamps and finish-crossing interpolation.
+Copy `telemetry-config.example.json` and set `UMR_CONFIG` to its absolute path to
+configure the broker, storage file, finish endpoints, eligibility thresholds and
+ordered checkpoints. Coordinates are `[longitude, latitude]`; checkpoints include
+a third value, their radius in metres. A custom track ID requires explicit finish
+coordinates, minimum lap distance and checkpoints. Configure these for the real
+circuit before using hardware.
 
-The default finish line is for the simulator: configure `lap_timer.py` for the
-actual circuit. The delta is a GPS estimate, not a transponder timing result.
-Sensor graphs still use their own telemetry timestamps; they are not overlaid
-onto GPS positions because the current simulators have independent clocks.
+Environment overrides are `UMR_MQTT_HOST`, `UMR_MQTT_PORT`, `UMR_STATE_FILE`,
+`UMR_DASHBOARD_HOST`, `UMR_DASHBOARD_PORT`, `UMR_STM32_HOST` and `UMR_STM32_PORT`.
+The default dashboard binds to `127.0.0.1:8050`. For a remote broker, the launcher
+starts clients without attempting to start a local Mosquitto instance. MQTT topics
+currently identify `umf1/car01`; deployment still needs the intended broker access
+configuration. `UMR_SIM_START_SECONDS` and `UMR_SIM_SESSION_ID` are set by the
+launcher for simulation and should not be injected into a hardware gateway.
 
 ## Recording and replay
 
@@ -175,8 +213,11 @@ The logger creates matching files under `logs/`:
 
 - `telemetry_<session>.csv`: complete valid fast samples, with receive time
   and source session ID, compatible with earlier fast CSV replay.
-- `telemetry_<session>.jsonl`: every `umf1/car01/#` topic, including GPS,
-  laps, gateway status and validation flags. Each record contains host wall
+- `telemetry_<session>.jsonl`: raw telemetry, GPS, completed laps, gateway
+  status and validation flags from `umf1/car01/#`. Derived lap display snapshots,
+  appends and commands are omitted by default because recorded GPS/inputs regenerate
+  them. Set `UMR_LOG_LAP_STATE=1` to include these for protocol diagnostics; doing
+  so substantially increases recording size. Each record contains host wall
   and monotonic receive timestamps, topic, QoS, retained flag, exact payload
   bytes in base64, and a JSON-safe decoded view when available.
 
@@ -185,8 +226,8 @@ python replay_telemetry.py logs/telemetry_<session>.csv --speed 1
 python replay_telemetry.py logs/telemetry_<session>.jsonl --speed 1
 ```
 
-JSONL replay uses host monotonic timing. By default it skips recorded lap and
-processed topics so running processors can regenerate them. `--all-topics`
+JSONL replay uses host monotonic timing. By default it skips recorded lap events, lap snapshots/updates/commands and
+processed topics so the running lap service and processor can regenerate them. `--all-topics`
 also replays those derived messages; stop their live producers first to avoid
 duplicates. Replay sends no retained messages. Use an isolated test broker and
 stop live source simulators when replaying a recording.
@@ -205,6 +246,5 @@ See `telemetry-packet.md` for the finalized CRC and exact packet bytes.
 Fast simulation now targets 100 Hz; this does not establish physical UART or
 Wi-Fi performance. The repository still has no STM32/ESP32 firmware or physical
 serial backend. GPIO assignments, sensor calibration and GPS/status/event binary
-payloads require hardware implementation and bench verification. Keep MQTT
-brokers and addresses configured for the intended test network; all Python
-programs currently default to localhost.
+payloads require hardware implementation and bench verification. Configure the intended MQTT broker and circuit with
+`telemetry-config.example.json`.

@@ -7,8 +7,7 @@ from mqtt_runtime import run_mqtt
 from telemetry_validation import decode_object
 
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TOPIC = "umf1/#"
 
 sequence_trackers = {}

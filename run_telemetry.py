@@ -9,7 +9,9 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
+from telemetry_config import BROKER, PORT, DASHBOARD_HOST, DASHBOARD_PORT, STM32_PORT
 
 ROOT = Path(__file__).resolve().parent
 PROGRAMS = (
@@ -23,9 +25,9 @@ BOOTSTRAP = (
 )
 
 
-def port_open(port):
+def port_open(port, host="127.0.0.1"):
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=.3):
+        with socket.create_connection((host, port), timeout=.3):
             return True
     except (ConnectionRefusedError, TimeoutError):
         return False
@@ -57,12 +59,15 @@ class Launcher:
         self.logs = Path(logs)
         self.logs.mkdir(parents=True, exist_ok=True)
         self.children = []
+        self.environment = dict(os.environ, UMR_SIM_START_SECONDS=str(time.monotonic() + 3),
+                                UMR_SIM_SESSION_ID=uuid.uuid4().hex)
 
     def spawn(self, name, command):
         log = (self.logs / f"{name}.log").open("w", encoding="utf-8")
         options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         try:
-            process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options)
+            process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                       env=self.environment, **options)
         except BaseException:
             log.close()
             raise
@@ -81,10 +86,10 @@ class Launcher:
 
     def wait_for_broker(self, timeout=10):
         deadline = time.monotonic() + timeout
-        while not port_open(1883):
+        while not port_open(PORT):
             self.check_children()
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Mosquitto did not open port 1883. See {self.logs / 'mosquitto.log'}")
+                raise RuntimeError(f"Mosquitto did not open port {PORT}. See {self.logs / 'mosquitto.log'}")
             time.sleep(.1)
 
     def stop(self):
@@ -127,22 +132,23 @@ def main(argv=None):
         missing = [name for name in ("paho", "dash", "plotly") if importlib.util.find_spec(name) is None]
         if missing:
             raise RuntimeError("Missing dependencies. Run: python -m pip install -r requirements.txt")
-        for port in (9000, 8050):
+        for port in (STM32_PORT, DASHBOARD_PORT):
             if port_open(port):
                 raise RuntimeError(f"Port {port} is already in use. Stop the existing simulator/dashboard before launching.")
-        broker_running = port_open(1883)
+        remote_broker = BROKER not in ("localhost", "127.0.0.1", "::1")
+        broker_running = remote_broker or port_open(PORT)
         executable = None if broker_running else find_mosquitto(args.mosquitto_path)
         logs = ROOT / "logs" / ("launcher_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
         launcher = Launcher(logs)
         print(f"Program logs: {logs}", flush=True)
         if broker_running:
-            print("Reusing broker on localhost:1883; it will remain running after shutdown.")
+            print(f"Using broker at {BROKER}:{PORT}; it will remain running after shutdown.")
         else:
-            launcher.spawn("mosquitto", [executable, "-p", "1883", "-v"])
+            launcher.spawn("mosquitto", [executable, "-p", str(PORT), "-v"])
             launcher.wait_for_broker()
         for script in PROGRAMS + (("mqtt_subscriber.py",) if args.subscriber else ()):
             launcher.start_python(script)
-        print("Dashboard starting at http://127.0.0.1:8050\nPress Ctrl+C here to stop the session.", flush=True)
+        print(f"Dashboard starting at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}\nPress Ctrl+C here to stop the session.", flush=True)
         while True:
             launcher.check_children()
             time.sleep(.25)

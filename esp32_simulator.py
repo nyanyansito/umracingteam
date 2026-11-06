@@ -3,6 +3,7 @@ import socket
 import struct
 import time
 import uuid
+import os
 
 import paho.mqtt.client as mqtt
 from mqtt_runtime import start_mqtt
@@ -18,8 +19,7 @@ from telemetry_packet import (
 
 
 # --- Simulated UART link (STM32 side) ---
-STM32_HOST = "localhost"
-STM32_PORT = 9000
+from telemetry_config import STM32_HOST, STM32_PORT
 
 STM32_RECONNECT_MIN_DELAY_SECONDS = 1
 STM32_RECONNECT_MAX_DELAY_SECONDS = 10
@@ -29,8 +29,7 @@ PACKET_SIZE = HEADER_SIZE + PAYLOAD_SIZE + CRC_SIZE
 START_MARKER_BYTES = struct.pack("<H", START_MARKER)
 
 # --- MQTT link (pit-wall side) ---
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TELEMETRY_TOPIC = "umf1/car01/telemetry/fast"
 STATUS_TOPIC = "umf1/car01/gateway/status"
 
@@ -130,7 +129,7 @@ def build_status(now=None, online=True):
         "packet_count": packet_count,
         "decode_error_count": decode_error_count,
         "dropped_count": dropped_count,
-        "timestamp_ms": int(time.time() * 1000),
+        "wall_time_ms": int(time.time() * 1000),
     }
 
 
@@ -234,7 +233,7 @@ def main():
                 stm32_connected = True
                 last_packet_time = None
                 reconnect_delay = STM32_RECONNECT_MIN_DELAY_SECONDS
-                stream_session = uuid.uuid4().hex
+                stream_session = os.environ.get("UMR_SIM_SESSION_ID") or uuid.uuid4().hex
                 tracker = SequenceTracker()
                 buffer = b""
 

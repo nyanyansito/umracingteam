@@ -3,8 +3,7 @@ import json
 import paho.mqtt.client as mqtt
 
 
-BROKER = "localhost"
-PORT = 1883
+from telemetry_config import BROKER, PORT
 TOPIC = "umf1/car01/status"
 
 
