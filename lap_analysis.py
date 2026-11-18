@@ -102,6 +102,8 @@ class LapAnalysis:
         if self.timer.previous_position is None:
             self.interrupt()
             return
+        if not self.timer.timing_enabled and not self.approach:
+            self.origin = self.timer.previous_position
         point = self.xy(self.timer.previous_position)
         mode = input_mode(gps)
         channels = {field: gps.get(field) if is_number(gps.get(field)) else None for field in FAST_FIELDS}

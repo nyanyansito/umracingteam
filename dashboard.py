@@ -62,6 +62,7 @@ last_snapshot_request = -float("inf")
 # ADDED: remembers which channels were recently flagged out of range
 alert_tracker = AlertTracker()
 lap_analysis = RemoteLapAnalysis()
+hardware_source = None
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -429,10 +430,16 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
     return figure, delta
 
 
+def lap_snapshot():
+    if hardware_source is not None:
+        return hardware_source.lap_snapshot()
+    with telemetry_lock:
+        return lap_analysis.snapshot()
+
+
 def update_lap_dashboard(_, colour="inputs", inspection=None, live_revision=0, state=None):
     if state is None:
-        with telemetry_lock:
-            state = lap_analysis.snapshot()
+        state = lap_snapshot()
     delta = state["delta"]
     metrics = [("CURRENT LAP", str(state["lap_number"] or "—")),
                ("LAST LAP", lap_time(state["last"])),
@@ -454,6 +461,14 @@ def update_lap_dashboard(_, colour="inputs", inspection=None, live_revision=0, s
         status = "Position cannot be matched reliably to the reference · delta unavailable"
     else:
         status = f"Comparing with {"best" if state.get("selected_reference") is None else "reference"} lap {state['reference_lap']} · negative delta means faster"
+    if "hardware_gps_status" in state:
+        gps_status = state["hardware_gps_status"]
+        if not state["fresh"]:
+            status = gps_status
+        elif not state["hardware_lap_timing"]:
+            status = gps_status + " · Configure a local circuit to enable lap timing"
+        else:
+            status = gps_status + " · " + status
     if state.get("invalid_reason"):
         status += " · Last crossing rejected: " + state["invalid_reason"]
     if state.get("gps_age") is not None:
@@ -466,6 +481,8 @@ def update_lap_dashboard(_, colour="inputs", inspection=None, live_revision=0, s
 @app.callback(Output("lap-clock-state", "data"), Input("clock-update", "n_intervals"),
               running=[(Output("clock-update", "disabled"), True, False)])
 def update_lap_clock(_):
+    if hardware_source is not None:
+        return hardware_source.clock_state()
     with telemetry_lock:
         return lap_analysis.clock_state()
 
@@ -508,15 +525,19 @@ def lap_table(state):
     ])
 
 
-def channel_range(field, values):
+def channel_range(field, values, *, steering_voltage=False):
     spec = CHANNEL_SPECS[field]
+    low, high = spec["min_value"], spec["max_value"]
+    if field == "steering_degrees" and steering_voltage:
+        low, high = 0, 3.3
     finite = [v for v in values if is_number(v)]
-    low = min([spec["min_value"]] + finite)
-    high = max([spec["max_value"]] + finite)
+    low = min([low] + finite)
+    high = max([high] + finite)
     return [low, high if high > low else low + 1]
 
 
-def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed):
+def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed,
+                       *, steering_voltage=False):
     figure = make_subplots(
         rows=4,
         cols=1,
@@ -525,7 +546,7 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
         subplot_titles=(
             "Throttle Position",
             "Brake Pressure",
-            "Steering Angle",
+            "Steering Sensor Voltage" if steering_voltage else "Steering Angle",
             "Vehicle Speed",
         ),
     )
@@ -593,8 +614,8 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     )
 
     figure.update_yaxes(
-        title_text="Steering (°)",
-        range=channel_range("steering_degrees", graph_steering),
+        title_text="Steering (V)" if steering_voltage else "Steering (°)",
+        range=channel_range("steering_degrees", graph_steering, steering_voltage=steering_voltage),
         row=3,
         col=1,
     )
@@ -625,7 +646,37 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     return figure
 
 
+def update_hardware_cards(include_figure):
+    from hardware_bench import VOLTS_PER_COUNT
+
+    status, steering_status, counts, age = hardware_source.steering_snapshot()
+    calibration = hardware_source.calibration
+    value, detail = "—", steering_status
+    if counts is not None:
+        volts = counts * VOLTS_PER_COUNT
+        angle = None if calibration is None else calibration.angle(volts)
+        value = f"{volts:.4f} V" if angle is None else f"{angle:.2f}°"
+        detail = f"{volts:.4f} V · {counts} ADC counts" if angle is not None else f"{counts} ADC counts · "
+        if angle is None:
+            detail += "Angle calibration required" if calibration is None else "Outside calibration range"
+
+    outputs = []
+    for key, _, title in METRIC_BOXES:
+        outputs += [title, box_style, detail if key == "steering" else "Unavailable"]
+    figure = None
+    if include_figure:
+        arrays, _, _ = hardware_source.sensor_history()
+        figure = make_sensor_figure(*arrays, steering_voltage=calibration is None)
+    age_label = "" if age is None else f" · last steering frame {age * 1000:.0f} ms ago"
+    return ("—", "—", value, "—", f"STM32 USB · {status}{age_label}", figure, *outputs,
+            "Hardware data · steering and GPS", {
+                **validation_base_style, "backgroundColor": "#e2e8f0", "color": "#172033",
+            })
+
+
 def update_dashboard(_, include_figure=True):
+    if hardware_source is not None:
+        return update_hardware_cards(include_figure)
     with telemetry_lock:
         latest = telemetry.copy()
 
@@ -747,15 +798,21 @@ def update_sensor_cards(n):
               Input("return-live", "n_clicks"), State("sensor-view-state", "data"),
               running=[(Output("sensor-update", "disabled"), True, False)])
 def update_sensor_graph(_, live_revision, previous):
-    with telemetry_lock:
-        arrays = [list(h) for h in (time_history, throttle_history, brake_history, steering_history, speed_history)]
-        revision, generation = history_revision, history_generation
-    ranges = [channel_range(field, values) for field, values in zip(FAST_FIELDS, arrays[1:])]
+    steering_voltage = False
+    if hardware_source is not None:
+        arrays, revision, generation = hardware_source.sensor_history()
+        steering_voltage = hardware_source.calibration is None
+    else:
+        with telemetry_lock:
+            arrays = [list(h) for h in (time_history, throttle_history, brake_history, steering_history, speed_history)]
+            revision, generation = history_revision, history_generation
+    ranges = [channel_range(field, values, steering_voltage=steering_voltage)
+              for field, values in zip(FAST_FIELDS, arrays[1:])]
     current = {"revision": revision, "generation": generation, "live": live_revision, "ranges": ranges}
     added = revision - previous["revision"] if previous else 0
     if (not previous or previous["generation"] != generation or previous["live"] != live_revision
             or added < 0 or added > len(arrays[0])):
-        figure = make_sensor_figure(*arrays)
+        figure = make_sensor_figure(*arrays, steering_voltage=steering_voltage)
         figure.update_layout(uirevision=f"sensors:{generation}:{live_revision}")
         return figure, no_update, current
     figure = no_update
@@ -777,8 +834,7 @@ def update_sensor_graph(_, live_revision, previous):
               Input("inspection", "data"), Input("return-live", "n_clicks"), State("lap-view-state", "data"),
               State("input-view-state", "data"), running=[(Output("lap-update", "disabled"), True, False)])
 def update_lap_views(n, colour, inspection, live_revision, previous, previous_inputs):
-    with telemetry_lock:
-        state = lap_analysis.snapshot()
+    state = lap_snapshot()
     cards, status, track, delta, history = update_lap_dashboard(n, colour, inspection, live_revision, state)
     identity = [state["lap_key"], state["revision"], colour, live_revision, is_number(inspection)]
     track, track_meta = stream_figure(track, (previous or {}).get("track"), identity)
@@ -807,16 +863,23 @@ def inspect_position(inputs, track, delta, _):
 
 @app.callback(Output("reference-feedback", "children"), Input("reference-choice", "value"), prevent_initial_call=True)
 def choose_reference(value):
-    with telemetry_lock:
-        state = lap_analysis.snapshot()
+    state = lap_snapshot()
     number = None if value == "best" else value
     if number is not None and (type(number) is not int or number not in state["reference_choices"]):
         return "That lap is no longer available in this session."
+    if hardware_source is not None:
+        try:
+            hardware_source.select_reference(number)
+        except ValueError:
+            return "That lap is no longer available in this session."
+        return "Session best selected" if number is None else f"Lap {number} selected"
     result = mqtt_client.publish(REFERENCE_TOPIC, json.dumps({"session_id": state["session_id"], "lap": number}), qos=1)
     return "Reference requested for this session" if result.rc == mqtt.MQTT_ERR_SUCCESS else "Lap service unavailable"
 
 
 def main():
+    global hardware_source
+
     parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
     parser.add_argument("--hardware-port", metavar="PORT", help="STM32 USB serial port, e.g. COM5")
     parser.add_argument("--steering-calibration", nargs=3, type=float,
@@ -825,7 +888,7 @@ def main():
                         help="Angle from center at each calibration endpoint (default: 10 degrees)")
     args = parser.parse_args()
     if args.hardware_port:
-        from hardware_bench import SteeringCalibration, run_dashboard
+        from hardware_bench import SerialBench, SteeringCalibration
 
         calibration = None
         if args.steering_calibration:
@@ -833,7 +896,16 @@ def main():
                 calibration = SteeringCalibration(*args.steering_calibration, args.steering_span_deg)
             except ValueError as error:
                 parser.error(str(error))
-        run_dashboard(args.hardware_port, calibration, DASHBOARD_HOST, DASHBOARD_PORT)
+        hardware_source = SerialBench(args.hardware_port, calibration)
+        reader = threading.Thread(target=hardware_source.read, name="stm32-usb", daemon=True)
+        reader.start()
+        print(f"Starting hardware telemetry at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+        try:
+            app.run(debug=False, host=DASHBOARD_HOST, port=DASHBOARD_PORT)
+        finally:
+            hardware_source.stop.set()
+            reader.join()
+            hardware_source = None
         return
     if args.steering_calibration is not None or args.steering_span_deg != 10.0:
         parser.error("Steering calibration requires --hardware-port.")

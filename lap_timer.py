@@ -35,7 +35,8 @@ class LapTimer:
     def __init__(self, finish_start=None, finish_end=None,
                  minimum_lap_seconds=MINIMUM_LAP_TIME_SECONDS,
                  maximum_gap_seconds=MAXIMUM_FIX_GAP_SECONDS,
-                 minimum_distance_m=None, minimum_departure_m=MINIMUM_DEPARTURE, checkpoints=None):
+                 minimum_distance_m=None, minimum_departure_m=MINIMUM_DEPARTURE, checkpoints=None,
+                 timing_enabled=True):
         custom_gate = finish_start is not None or finish_end is not None
         self.finish_start = finish_start or FINISH_START
         self.finish_end = finish_end or FINISH_END
@@ -44,6 +45,7 @@ class LapTimer:
         self.checkpoints = ([] if custom_gate else CHECKPOINTS) if checkpoints is None else checkpoints
         self.minimum_lap_seconds = minimum_lap_seconds
         self.maximum_gap_seconds = maximum_gap_seconds
+        self.timing_enabled = timing_enabled
         self.lap_number = 0
         self.session_id = None
         self.order = SampleOrder()
@@ -128,7 +130,7 @@ class LapTimer:
                         self.next_checkpoint += 1
                 before = cross_product(self.finish_start, self.finish_end, self.previous_position)
                 after = cross_product(self.finish_start, self.finish_end, position)
-                if (before < 0 <= after and segments_intersect(
+                if (self.timing_enabled and before < 0 <= after and segments_intersect(
                         self.previous_position, position, self.finish_start, self.finish_end)):
                     crossing_ms = previous_elapsed + delta_ms * (-before / (after - before))
                     if self.lap_start_ms is None:

@@ -2,14 +2,17 @@
 
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from math import isfinite
 import re
 import threading
 import time
 
-from dash import Dash, Input, Output, dcc, html
-import plotly.graph_objects as go
 import serial
+
+from lap_analysis import LapAnalysis
+from lap_timer import LapTimer
+from telemetry_config import TRACK_ID
 
 BAUD = 115200
 VOLTS_PER_COUNT = 4.096 / 32768  # ADS1115 gain setting in the bench sketch.
@@ -82,11 +85,39 @@ class SteeringCalibration:
         return -self.span * (volts - self.center) / (self.ccw - self.center)
 
 
+def rmc_fix(fields):
+    position = rmc_position(fields)
+    if position is None or len(fields) <= 9:
+        return None
+    try:
+        clock, _, fraction = fields[1].partition(".")
+        if len(clock) != 6 or len(fields[9]) != 6:
+            return None
+        utc = datetime.strptime(fields[9] + clock, "%d%m%y%H%M%S").replace(tzinfo=UTC)
+        millis = int((fraction + "000")[:3])
+        timestamp = (int(utc.timestamp()) * 1000 + millis) % (1 << 32)
+    except ValueError:
+        return None
+    fix = dict(gps_valid=True, timestamp_ms=timestamp, latitude=position[0], longitude=position[1])
+    try:
+        speed = float(fields[7]) * 1.852
+        if isfinite(speed) and speed >= 0:
+            fix["gps_speed_kmh"] = speed
+    except ValueError:
+        pass  # Position can still be usable when speed was omitted.
+    return fix
+
+
 class SerialBench:
-    def __init__(self, port):
+    def __init__(self, port, calibration=None, *, track_configured=TRACK_ID != "red_bull_ring"):
         self.port = port
+        self.calibration = calibration
         self.lock = threading.Lock()
         self.stop = threading.Event()
+        self.origin_time = time.monotonic()
+        self.lap = LapAnalysis(LapTimer(maximum_gap_seconds=GPS_TIMEOUT, timing_enabled=track_configured))
+        self.history = deque(maxlen=1000)
+        self.generation = 0
         self.connection_changed(f"Opening {port}…")
 
     def connection_changed(self, status):
@@ -96,7 +127,11 @@ class SerialBench:
             self.steering_time = None
             self.nmea_time = None
             self.rmc_time = None
-            self.trail = deque(maxlen=300)
+            self.position = None
+            self.history.clear()
+            self.generation += 1
+            self.revision = 0
+            self.lap.interrupt()
 
     def receive(self, line):
         if not line.endswith(b"\n"):
@@ -109,7 +144,15 @@ class SerialBench:
             if counts is not None and not -32768 <= counts <= 32767:
                 return
             with self.lock:
+                if self.steering_time is not None and now - self.steering_time > STEERING_TIMEOUT:
+                    self.history.append((None, None))
+                    self.revision += 1
                 self.counts, self.steering_time = counts, now
+                value = None if counts is None else counts * VOLTS_PER_COUNT
+                if value is not None and self.calibration is not None:
+                    value = self.calibration.angle(value)
+                self.history.append((now - self.origin_time, value))
+                self.revision += 1
             return
 
         fields = checked_nmea(frame)
@@ -117,32 +160,67 @@ class SerialBench:
             return
         with self.lock:
             self.nmea_time = now
-            if fields[0][2:] == "RMC":
-                position = rmc_position(fields)
-                if self.rmc_time is None or now - self.rmc_time > GPS_TIMEOUT or position is None:
-                    self.trail.clear()
+            if fields[0][2:] != "RMC":
+                return
+            fix = rmc_fix(fields)
+            if fix is None:
+                self.lap.interrupt()
                 self.rmc_time = now
-                if position is not None:
-                    self.trail.append(position)
+                self.position = None
+                return
+            if self.counts is not None and self.calibration is not None and now - self.steering_time <= .15:
+                fix["steering_degrees"] = self.calibration.angle(self.counts * VOLTS_PER_COUNT)
+            # The GPS source clock drives lap timing. A host-side outage must
+            # still break the trace, even if a receiver replays a recent fix.
+            if self.rmc_time is not None and now - self.rmc_time > GPS_TIMEOUT:
+                self.lap.interrupt()
+            self.lap.update(fix, now)
+            if self.lap.timer.source_status not in ("late", "duplicate"):
+                self.rmc_time = now
+                self.position = (fix["latitude"], fix["longitude"])
 
-    def snapshot(self):
+    def steering_snapshot(self):
+        with self.lock:
+            age = None if self.steering_time is None else time.monotonic() - self.steering_time
+            status, counts = "Waiting for STM32 steering data", None
+            if age is not None and age <= STEERING_TIMEOUT:
+                counts = self.counts
+                status = "ADS1115 unavailable" if counts is None else "Live"
+            return self.status, status, counts, age
+
+    def sensor_history(self):
+        with self.lock:
+            times = [point[0] for point in self.history]
+            values = [point[1] for point in self.history]
+            unavailable = [None] * len(times)
+            return [times, unavailable, unavailable, values, unavailable], self.revision, self.generation
+
+    def lap_snapshot(self):
         with self.lock:
             now = time.monotonic()
-            steering_status = "Waiting for STM32 steering data"
-            counts = None
-            if self.steering_time is not None and now - self.steering_time <= STEERING_TIMEOUT:
-                counts = self.counts
-                steering_status = "ADS1115 unavailable" if counts is None else "Live"
-
-            gps_status = "Waiting for GPS NMEA"
-            trail = ()
+            state = self.lap.snapshot(now)
+            status = "Waiting for GPS NMEA"
             if self.nmea_time is not None and now - self.nmea_time <= GPS_TIMEOUT:
-                gps_status = "NMEA received · Waiting for RMC"
-                if self.rmc_time is not None and now - self.rmc_time <= GPS_TIMEOUT:
-                    trail = tuple(self.trail)
-                    gps_status = "GPS fix" if trail else "No GPS fix"
+                status = "NMEA received · Waiting for RMC"
+                if self.rmc_time is not None and now - self.rmc_time <= GPS_TIMEOUT and self.position is None:
+                    status = "No GPS fix"
+            if state["fresh"]:
+                latitude, longitude = self.position
+                status = f"GPS fix · {latitude:.6f}°, {longitude:.6f}°"
+            else:
+                for key in ("current", "current_inputs", "current_channels", "current_distances"):
+                    state[key] = []
+            state["hardware_gps_status"] = status
+            state["hardware_lap_timing"] = self.lap.timer.timing_enabled
+            return state
 
-            return self.status, steering_status, counts, gps_status, trail
+    def clock_state(self):
+        with self.lock:
+            return self.lap.clock_state()
+
+    def select_reference(self, number):
+        with self.lock:
+            self.lap.select_reference(number)
 
     def read(self):
         while not self.stop.is_set():
@@ -155,58 +233,3 @@ class SerialBench:
             except OSError as error:
                 self.connection_changed(f"{self.port} unavailable · {error}")
                 self.stop.wait(1.0)
-
-
-def run_dashboard(port, calibration, host, dashboard_port):
-    bench = SerialBench(port)
-    app = Dash(__name__, title="UMR Hardware Bench")
-
-    def card(title, *children):
-        return html.Section([html.H2(title), *children], style={
-            "padding": "1rem 1.5rem", "border": "1px solid #dce2e9",
-            "borderRadius": "12px", "background": "#ffffff",
-        })
-
-    app.layout = html.Main([
-        html.H1("UMR Hardware Bench"),
-        html.P(id="serial-status"),
-        card("Steering", html.Div(id="steering-reading")),
-        card("GPS", html.Div(id="gps-reading"),
-             dcc.Graph(id="gps-trace", config={"displayModeBar": False})),
-        dcc.Interval(id="bench-refresh", interval=250),
-    ], style={"maxWidth": "960px", "margin": "2rem auto", "padding": "0 1rem",
-              "fontFamily": "system-ui, sans-serif", "display": "grid", "gap": "0.75rem"})
-
-    @app.callback(Output("serial-status", "children"), Output("steering-reading", "children"),
-                  Output("gps-reading", "children"), Output("gps-trace", "figure"),
-                  Input("bench-refresh", "n_intervals"))
-    def refresh(_):
-        status, steering_status, counts, gps_status, trail = bench.snapshot()
-        steering_readout = steering_status
-        if counts is not None:
-            volts = counts * VOLTS_PER_COUNT
-            angle_label = "Angle calibration required"
-            if calibration is not None:
-                angle = calibration.angle(volts)
-                angle_label = "Outside calibration range" if angle is None else f"{angle:+.1f}°"
-            steering_readout = f"{angle_label} · {volts:.4f} V · {counts} ADC counts"
-
-        figure = go.Figure()
-        gps_readout = gps_status
-        if trail:
-            latitude, longitude = trail[-1]
-            gps_readout = f"{gps_status} · {latitude:.6f}°, {longitude:.6f}°"
-            latitudes, longitudes = zip(*trail)
-            figure.add_scatter(x=longitudes, y=latitudes, mode="lines+markers",
-                               marker={"size": 5, "color": "#1665a9"})
-        figure.update_layout(xaxis_title="Longitude (°)", yaxis_title="Latitude (°)",
-                             height=320, margin={"l": 55, "r": 20, "t": 15, "b": 55})
-        return status, steering_readout, gps_readout, figure
-
-    reader = threading.Thread(target=bench.read, name="stm32-usb", daemon=True)
-    reader.start()
-    try:
-        app.run(host=host, port=dashboard_port, debug=False)
-    finally:
-        bench.stop.set()
-        reader.join()

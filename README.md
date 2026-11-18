@@ -5,7 +5,7 @@ The current development pipeline is:
 Simulated STM32 → binary TCP byte stream standing in for UART → simulated
 ESP32 → MQTT → validation, recording and live dashboard.
 GPS is a separate MQTT simulator in that pipeline. The USB hardware bench mode
-below provides a wired test for the real steering sensor and GPS.
+below feeds real steering and GPS into the same Pit Wall dashboard.
 
 ## Setup
 
@@ -22,9 +22,11 @@ Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
 ### Test real steering and GPS over STM32 USB
 
 Use the [STM32 bench sketch](firmware/steering_gps_bench)
-and the hardware mode of the dashboard. This mode reads the STM32 directly and
-shows only steering and GPS. It requires no Mosquitto, ESP32, or simulator
-processes.
+and run the Pit Wall dashboard in hardware mode. It reads the STM32 directly
+over USB and uses the original steering card, telemetry history and GPS track
+trace. Throttle, brake pressure and the vehicle-speed channel display as
+unavailable until those sensors are connected. This mode requires no Mosquitto,
+ESP32 or simulator processes.
 
 1. Wire the inputs with power off. The wiring follows the UMR bench plan.
 
@@ -60,8 +62,10 @@ processes.
    Use the port Windows assigns to the STM32 after uploading if it changed.
    Open [the dashboard](http://127.0.0.1:8050).
 
-4. Turn the steering wheel slowly on the bench. Check that the voltage and ADC
-   counts move. Measure the live voltage at a known counterclockwise angle,
+4. Turn the steering wheel slowly on the bench. Check that the steering card's
+   voltage and ADC counts change. Live Telemetry History plots steering voltage
+   until calibration is provided. Measure the voltage at a known
+   counterclockwise angle,
    at center, and at an equal clockwise angle. Supply those three voltages to
    get signed degrees. For example, using the prior bench measurements at
    −10°, center, and +10°:
@@ -71,8 +75,8 @@ processes.
    ```
 
    Clockwise is positive. Keep the tested range away from the sensor's wrap
-   point. Degrees are available within the measured calibration range, and
-   voltage and counts remain visible beyond it. Re-measure the three points
+   point. The card and steering plot display degrees within the measured
+   calibration range. Voltage and counts remain visible on the card beyond it. Re-measure the three points
    with the wheel installed if the earlier voltages were measured on the
    sensor shaft alone.
 5. Give the GPS antenna a clear view of the sky. **No GPS fix** means an RMC
@@ -80,6 +84,8 @@ processes.
    the dashboard has no recent checksum-valid NMEA sentence. A valid RMC
    position displays latitude and longitude and adds a point to the GPS
    trace. The current coordinates and trace clear on fix loss or timeout.
+   To enable lap timing, configure the real circuit in a custom `UMR_CONFIG`
+   file with a unique track ID, finish endpoints, lap distance and checkpoints.
 
 ### Start everything with one command
 
