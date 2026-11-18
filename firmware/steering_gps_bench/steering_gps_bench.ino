@@ -4,6 +4,13 @@
 #error "Select USB support: CDC (generic Serial supersede U(S)ART)."
 #endif
 
+// STM32duino 3.x renamed the concrete HardwareSerial class to Uart.
+#if __has_include(<Serial.h>)
+Uart gpsSerial(PA_3, PA_2);
+#else
+HardwareSerial gpsSerial(PA_3, PA_2);
+#endif
+
 constexpr uint8_t ADS_ADDRESS = 0x48;
 constexpr uint8_t ADS_CONVERSION = 0x00;
 constexpr uint8_t ADS_CONFIG = 0x01;
@@ -39,8 +46,8 @@ bool readSteering(int16_t &counts) {
 }
 
 void forwardGps() {
-  while (Serial2.available()) {
-    char next = static_cast<char>(Serial2.read());
+  while (gpsSerial.available()) {
+    char next = static_cast<char>(gpsSerial.read());
     if (next == '$') {
       nmeaLine[0] = next;
       nmeaLength = 1;
@@ -61,9 +68,7 @@ void forwardGps() {
 
 void setup() {
   Serial.begin(115200);  // USB CDC, to the laptop
-  Serial2.setRx(PA3);
-  Serial2.setTx(PA2);
-  Serial2.begin(9600);
+  gpsSerial.begin(9600);
   Wire.setSDA(PB7);
   Wire.setSCL(PB6);
   Wire.begin();

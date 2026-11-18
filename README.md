@@ -46,8 +46,8 @@ processes.
    **Generic STM32F4 series**, board part **Generic F407VGTx**, and
    **USB support → CDC (generic 'Serial' supersede U(S)ART)**. Use your
    working STM32CubeProgrammer SWD upload setup, then connect the STM32 USB CDC
-   port to the laptop. Keep `build_opt.h` beside the sketch. It enables USART2
-   for GPS, and the sketch uses the STM32 core's built-in Wire library.
+   port to the laptop. The sketch configures USART2 for GPS and uses the
+   STM32 core's built-in Wire library.
 3. Close Arduino Serial Monitor so the dashboard can open the COM port. Stop
    any dashboard already using port 8050. From the repository folder with your
    Python environment active, run:
