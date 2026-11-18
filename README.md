@@ -4,7 +4,8 @@ The current development pipeline is:
 
 Simulated STM32 → binary TCP byte stream standing in for UART → simulated
 ESP32 → MQTT → validation, recording and live dashboard.
-GPS is currently a separate MQTT simulator feeding the lap timer.
+GPS is a separate MQTT simulator in that pipeline. The USB hardware bench mode
+below provides a wired test for the real steering sensor and GPS.
 
 ## Setup
 
@@ -17,6 +18,68 @@ python -m pip install -r requirements.txt
 ```
 
 Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
+
+### Test real steering and GPS over STM32 USB
+
+Use the [STM32 bench sketch](firmware/steering_gps_bench)
+and the hardware mode of the dashboard. This mode reads the STM32 directly and
+shows only steering and GPS. It requires no Mosquitto, ESP32, or simulator
+processes.
+
+1. Wire the inputs with power off. The wiring follows the UMR bench plan.
+
+   | Connection | Pin or setting |
+   |---|---|
+   | P3022 signal | ADS1115 AIN0 |
+   | ADS1115 SCL / SDA | STM32 PB6 / PB7, with I²C pull-ups to 3.3 V |
+   | ADS1115 ADDR | GND for address 0x48 |
+   | NEO-M8N TX | STM32 PA3 (USART2 RX) at 9600 baud |
+   | Ground | Common ground for STM32, GPS, ADS1115 and P3022 |
+
+   Power the P3022 and ADS1115 with the verified 3.3 V setup from the bench
+   plan. Check that the P3022 output stays within the ADS1115's 0 V to VDD
+   operating range across the tested movement. Use the GPS breakout's verified
+   supply and 3.3 V UART levels. The sketch only reads GPS, so the GPS RX pin
+   may be left open. PA2 is reserved as the USART2 TX pin in the sketch.
+
+2. Open the sketch in Arduino IDE. For the STM32F407VGT6, select
+   **Generic STM32F4 series**, board part **Generic F407VGTx**, and
+   **USB support → CDC (generic 'Serial' supersede U(S)ART)**. Use your
+   working STM32CubeProgrammer SWD upload setup, then connect the STM32 USB CDC
+   port to the laptop. Keep `build_opt.h` beside the sketch. It enables USART2
+   for GPS, and the sketch uses the STM32 core's built-in Wire library.
+3. Close Arduino Serial Monitor so the dashboard can open the COM port. Stop
+   any dashboard already using port 8050. From the repository folder with your
+   Python environment active, run:
+
+   ```powershell
+   python -m pip install -r requirements.txt
+   python dashboard.py --hardware-port COM5
+   ```
+
+   Use the port Windows assigns to the STM32 after uploading if it changed.
+   Open [the dashboard](http://127.0.0.1:8050).
+
+4. Turn the steering wheel slowly on the bench. Check that the voltage and ADC
+   counts move. Measure the live voltage at a known counterclockwise angle,
+   at center, and at an equal clockwise angle. Supply those three voltages to
+   get signed degrees. For example, using the prior bench measurements at
+   −10°, center, and +10°:
+
+   ```powershell
+   python dashboard.py --hardware-port COM5 --steering-calibration 1.2 1.4 1.7 --steering-span-deg 10
+   ```
+
+   Clockwise is positive. Keep the tested range away from the sensor's wrap
+   point. Degrees are available within the measured calibration range, and
+   voltage and counts remain visible beyond it. Re-measure the three points
+   with the wheel installed if the earlier voltages were measured on the
+   sensor shaft alone.
+5. Give the GPS antenna a clear view of the sky. **No GPS fix** means an RMC
+   sentence arrived without a usable position. **Waiting for GPS NMEA** means
+   the dashboard has no recent checksum-valid NMEA sentence. A valid RMC
+   position displays latitude and longitude and adds a point to the GPS
+   trace. The current coordinates and trace clear on fix loss or timeout.
 
 ### Start everything with one command
 
@@ -244,7 +307,7 @@ heartbeats, recording/replay, framing recovery, and a fixed firmware wire vector
 See `telemetry-packet.md` for the finalized CRC and exact packet bytes.
 
 Fast simulation now targets 100 Hz; this does not establish physical UART or
-Wi-Fi performance. The repository still has no STM32/ESP32 firmware or physical
-serial backend. GPIO assignments, sensor calibration and GPS/status/event binary
-payloads require hardware implementation and bench verification. Configure the intended MQTT broker and circuit with
+Wi-Fi performance. The steering/GPS USB bench path is wired directly to the laptop.
+The STM32-to-ESP32 binary UART and Wi-Fi/MQTT path still needs vehicle firmware
+and bench verification. Configure the intended MQTT broker and circuit with
 `telemetry-config.example.json`.

@@ -1,3 +1,4 @@
+import argparse
 import threading
 import time
 import json
@@ -815,7 +816,28 @@ def choose_reference(value):
     return "Reference requested for this session" if result.rc == mqtt.MQTT_ERR_SUCCESS else "Lap service unavailable"
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
+    parser.add_argument("--hardware-port", metavar="PORT", help="STM32 USB serial port, e.g. COM5")
+    parser.add_argument("--steering-calibration", nargs=3, type=float,
+                        metavar=("CCW_VOLTS", "CENTER_VOLTS", "CW_VOLTS"))
+    parser.add_argument("--steering-span-deg", type=float, default=10.0,
+                        help="Angle from center at each calibration endpoint (default: 10 degrees)")
+    args = parser.parse_args()
+    if args.hardware_port:
+        from hardware_bench import SteeringCalibration, run_dashboard
+
+        calibration = None
+        if args.steering_calibration:
+            try:
+                calibration = SteeringCalibration(*args.steering_calibration, args.steering_span_deg)
+            except ValueError as error:
+                parser.error(str(error))
+        run_dashboard(args.hardware_port, calibration, DASHBOARD_HOST, DASHBOARD_PORT)
+        return
+    if args.steering_calibration is not None or args.steering_span_deg != 10.0:
+        parser.error("Steering calibration requires --hardware-port.")
+
     print(f"Starting dashboard at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     start_mqtt(mqtt_client, BROKER, PORT)
     try:
@@ -823,3 +845,7 @@ if __name__ == "__main__":
     finally:
         mqtt_client.disconnect()
         mqtt_client.loop_stop()
+
+
+if __name__ == "__main__":
+    main()
