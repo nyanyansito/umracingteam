@@ -225,11 +225,17 @@ class SerialBench:
     def read(self):
         while not self.stop.is_set():
             try:
-                with serial.Serial(self.port, BAUD, timeout=0.25) as connection:
+                with serial.serial_for_url(self.port, BAUD, timeout=0.25) as connection:
                     connection.reset_input_buffer()
-                    self.connection_changed(f"{self.port} connected · {BAUD} baud")
+                    self.connection_changed(f"{self.port} connected")
+                    pending = b""
                     while not self.stop.is_set():
-                        self.receive(connection.read_until(size=160))
+                        pending += connection.read_until(size=160 - len(pending))
+                        if pending.endswith(b"\n"):
+                            self.receive(pending)
+                            pending = b""
+                        elif len(pending) == 160:
+                            pending = b""
             except OSError as error:
                 self.connection_changed(f"{self.port} unavailable · {error}")
                 self.stop.wait(1.0)

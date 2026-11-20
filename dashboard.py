@@ -881,7 +881,8 @@ def main():
     global hardware_source
 
     parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
-    parser.add_argument("--hardware-port", metavar="PORT", help="STM32 USB serial port, e.g. COM5")
+    parser.add_argument("--hardware-port", metavar="PORT",
+                        help="STM32 USB port (COM5) or ESP32 TCP stream (socket://192.168.4.1:9000)")
     parser.add_argument("--steering-calibration", nargs=3, type=float,
                         metavar=("CCW_VOLTS", "CENTER_VOLTS", "CW_VOLTS"))
     parser.add_argument("--steering-span-deg", type=float, default=10.0,
@@ -897,7 +898,7 @@ def main():
             except ValueError as error:
                 parser.error(str(error))
         hardware_source = SerialBench(args.hardware_port, calibration)
-        reader = threading.Thread(target=hardware_source.read, name="stm32-usb", daemon=True)
+        reader = threading.Thread(target=hardware_source.read, name="hardware-telemetry", daemon=True)
         reader.start()
         print(f"Starting hardware telemetry at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
         try:
