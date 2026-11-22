@@ -70,7 +70,7 @@ reader with **Ctrl+C** before reopening the dashboard.
 To enable lap timing, configure the real circuit in a custom `UMR_CONFIG` file
 with a unique track ID, finish endpoints, lap distance and checkpoints.
 
-### Check brake sensor voltage over Wi-Fi
+### Check pedal inputs over Wi-Fi
 
 For the bench setup, connect the brake sensor's red wire and ADS1115 `VDD` to
 regulated 5 V. Connect the sensor's black wire, ADS1115 `GND` and `ADDR`, and
@@ -82,11 +82,21 @@ open-drain I²C with internal pulls disabled. With both boards off, wire ADS1115
 `SCL` to `PB6` and `SDA` to `PB7`. Power the STM32 before enabling the 5 V supply
 to the ADS1115 and sensor. Switch that supply off before cutting STM32 power.
 
-Upload the STM32 sketch and start the dashboard with the same `--hardware-port`
-command above. The **Brake Sensor Voltage** card appears when brake frames arrive.
-At zero pressure, compare it with the multimeter reading at `A0`, about 0.5 V on
-the tested sensor. The raw stream reports `BRAKE_V=0.500` or a nearby value.
-`BRAKE_I2C_ERROR` means the STM32 could not complete an ADS1115 transfer.
+Start the dashboard with the same `--hardware-port` command above. **Live Pedal
+Inputs** shows separate throttle and brake percentage traces on a shared time
+axis. The brake card also shows the raw voltage. At zero pressure, compare it
+with the voltage at `A0`, about 0.49 V on the tested sensor.
+
+The brake percentage uses 0.490 V as released and 4.500 V as a provisional
+full-scale input. It represents the selected voltage span. Use
+`--brake-calibration-v RELEASED FULL_SCALE` with verified endpoints to change it.
+The raw stream still reports `BRAKE_V` in volts. `BRAKE_I2C_ERROR` means the STM32
+could not complete an ADS1115 transfer.
+
+The throttle trace starts when the STM32 sends `UMR_THROTTLE` frames and the
+dashboard is launched with `--throttle-calibration-mv RELEASED PRESSED` using
+measured endpoints for the throttle bench circuit. Until then the throttle
+panel stays empty.
 
 ### Start everything with one command
 

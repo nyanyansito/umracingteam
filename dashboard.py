@@ -660,13 +660,33 @@ def make_throttle_bench_figure(times, values, *, millivolts):
     )
 
 
+def make_live_pedal_figure(throttle, brake):
+    figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
+    for row, name, color, samples in (
+        (1, "Throttle", "#22c55e", throttle),
+        (2, "Brake", "#f87171", brake),
+    ):
+        times, values = zip(*samples) if samples else ([], [])
+        figure.add_trace(go.Scatter(
+            x=times, y=values, name=name, mode="lines+markers",
+            line={"color": color, "width": 2}, marker={"size": 3}, connectgaps=False,
+            hovertemplate="%{x:.2f} s · %{y:.1f}%<extra>" + name + "</extra>",
+        ), row=row, col=1)
+        figure.update_yaxes(title_text=f"{name} (%)", range=[0, 100], dtick=25, row=row, col=1)
+    figure.update_xaxes(title_text="Elapsed time (s)", row=2, col=1)
+    figure.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+                         title="Live Pedal Inputs", height=500, showlegend=False,
+                         margin={"l": 65, "r": 28, "t": 55, "b": 55})
+    return figure
+
+
 def update_hardware_cards(include_figure):
     from hardware_bench import ThrottleCalibration, VOLTS_PER_COUNT
 
     source = hardware_source
     throttle_only = source.throttle_only
     value, detail, age_label = "—", "", ""
-    brake_value, brake_detail, show_brake = "—", "", False
+    brake_value, brake_detail, brake_style = "—", "", box_style
     figure = None
     if throttle_only:
         status, detail, counts, age = source.sensor_snapshot()
@@ -686,24 +706,38 @@ def update_hardware_cards(include_figure):
             arrays, _, _ = source.sensor_history()
             figure = make_throttle_bench_figure(*arrays, millivolts=calibration is None)
     else:
-        status = source.connection_status()
-        show_brake, brake_volts, brake_detail = source.brake_snapshot()
+        status, detail, counts, _ = source.sensor_snapshot()
+        if counts is not None:
+            millivolts = counts * VOLTS_PER_COUNT * 1000
+            percent = None if source.calibration is None else source.calibration.percent(millivolts)
+            if percent is None:
+                reason = ("Calibration required" if ThrottleCalibration.in_fixture_range(millivolts)
+                          else "Throttle signal out of range")
+                detail = f"{millivolts:.1f} mV · {reason}"
+            else:
+                value, detail = f"{percent:.1f} %", f"{millivolts:.1f} mV"
+        _, brake_volts, brake_detail = source.brake_snapshot()
+        if brake_detail and brake_detail != "Waiting for brake data":
+            brake_style = alert_box_style
         if brake_volts is not None:
-            brake_value = f"{brake_volts:.3f} V"
+            percent = source.brake_calibration.percent(brake_volts)
+            if percent is not None:
+                brake_value = f"{percent:.1f} %"
+            brake_detail = " · ".join(filter(None, (f"{brake_volts:.3f} V", brake_detail)))
+        if include_figure:
+            throttle, brake, _, _ = source.pedal_history()
+            figure = make_live_pedal_figure(throttle, brake)
 
     outputs = []
     for key, _, title in METRIC_BOXES:
-        if throttle_only and key == "throttle":
-            outputs += ["Throttle Bench", box_style, detail]
-        elif show_brake and key == "brake":
-            style = alert_box_style if brake_detail else box_style
-            outputs += ["Brake Sensor Voltage", style, brake_detail]
+        if key == "throttle":
+            outputs += ["Throttle Bench" if throttle_only else "Throttle Input", box_style, detail]
+        elif not throttle_only and key == "brake":
+            outputs += ["Brake Input", brake_style, brake_detail]
         else:
             outputs += [title, {"display": "none"}, ""]
     link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
-    label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS"
-    if show_brake:
-        label = "Hardware data · GPS and brake"
+    label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS and pedal inputs"
     return (value, brake_value, "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
                 **validation_base_style, "backgroundColor": "#e2e8f0", "color": "#172033",
             })
@@ -836,7 +870,13 @@ def update_sensor_graph(_, live_revision, previous):
     source = hardware_source
     if source is not None:
         if not source.throttle_only:
-            return no_update, no_update, no_update
+            throttle, brake, revision, generation = source.pedal_history()
+            current = {"revision": revision, "generation": generation, "live": live_revision}
+            if previous == current:
+                return no_update, no_update, no_update
+            figure = make_live_pedal_figure(throttle, brake)
+            figure.update_layout(uirevision=f"pedals:{generation}:{live_revision}")
+            return figure, no_update, current
         arrays, revision, generation = source.sensor_history()
         millivolts = source.calibration is None
         ranges = [channel_range("throttle_percent", arrays[1], throttle_millivolts=millivolts)]
@@ -928,27 +968,31 @@ def main():
     parser.add_argument("--throttle-bench", action="store_true",
                         help="Read the standalone STM32 throttle bench sketch")
     parser.add_argument("--throttle-calibration-mv", nargs=2, type=float, metavar=("RELEASED", "PRESSED"),
-                        help="Show bench throttle percentage using measured endpoint voltages in mV")
+                        help="Show hardware throttle percentage using measured endpoint voltages in mV")
+    parser.add_argument("--brake-calibration-v", nargs=2, type=float, metavar=("RELEASED", "FULL_SCALE"),
+                        help="Set the brake percentage endpoints in volts (default: 0.490 and 4.500 V)")
     args = parser.parse_args()
     if args.throttle_bench and not args.hardware_port:
         parser.error("--throttle-bench requires --hardware-port.")
-    if args.throttle_calibration_mv is not None and not args.throttle_bench:
-        parser.error("--throttle-calibration-mv requires --throttle-bench.")
+    if args.throttle_calibration_mv is not None and not args.hardware_port:
+        parser.error("--throttle-calibration-mv requires --hardware-port.")
+    if args.brake_calibration_v is not None and (not args.hardware_port or args.throttle_bench):
+        parser.error("--brake-calibration-v requires combined hardware mode.")
     if args.hardware_port:
-        from hardware_bench import SerialBench, ThrottleCalibration
+        from hardware_bench import BrakeCalibration, SerialBench, ThrottleCalibration
 
         calibration = None
         try:
             if args.throttle_calibration_mv is not None:
                 calibration = ThrottleCalibration(*args.throttle_calibration_mv)
+            brake_calibration = BrakeCalibration(*args.brake_calibration_v) if args.brake_calibration_v else None
         except ValueError as error:
             parser.error(str(error))
-        hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench)
+        hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench,
+                                      brake_calibration=brake_calibration)
         reader = threading.Thread(target=hardware_source.read, name="hardware-telemetry", daemon=True)
         reader.start()
         app.layout["lap-input-graphs"].style = {"display": "none"}
-        if not args.throttle_bench:
-            app.layout["telemetry-graphs"].style = {"display": "none"}
         print(f"Starting hardware telemetry at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
         try:
             app.run(debug=False, host=DASHBOARD_HOST, port=DASHBOARD_PORT)

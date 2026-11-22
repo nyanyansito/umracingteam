@@ -63,6 +63,26 @@ def rmc_position(fields):
     return latitude, longitude
 
 
+def percent_of_span(value, released, full_scale):
+    fraction = (value - released) / (full_scale - released)
+    return 100 * max(0, min(1, fraction))
+
+
+@dataclass(frozen=True)
+class BrakeCalibration:
+    released_v: float = 0.490
+    full_scale_v: float = 4.500
+
+    def __post_init__(self):
+        if not 0 <= self.released_v < self.full_scale_v <= 5:
+            raise ValueError("Use a released voltage below the full-scale voltage, both within 0–5 V.")
+
+    def percent(self, volts):
+        if volts is None or not 0 <= volts <= 5:
+            return None
+        return percent_of_span(volts, self.released_v, self.full_scale_v)
+
+
 @dataclass(frozen=True)
 class ThrottleCalibration:
     released_mv: float
@@ -82,8 +102,7 @@ class ThrottleCalibration:
     def percent(self, millivolts):
         if not self.in_fixture_range(millivolts):
             return None
-        fraction = (millivolts - self.released_mv) / (self.pressed_mv - self.released_mv)
-        return 100 * max(0, min(1, fraction))
+        return percent_of_span(millivolts, self.released_mv, self.pressed_mv)
 
 
 def rmc_fix(fields):
@@ -111,15 +130,17 @@ def rmc_fix(fields):
 
 class SerialBench:
     def __init__(self, port, calibration=None, *, throttle_only=False,
-                 track_configured=TRACK_ID != "red_bull_ring"):
+                 track_configured=TRACK_ID != "red_bull_ring", brake_calibration=None):
         self.port = port
         self.calibration = calibration
+        self.brake_calibration = brake_calibration or BrakeCalibration()
         self.throttle_only = throttle_only
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.origin_time = time.monotonic()
         self.lap = LapAnalysis(LapTimer(maximum_gap_seconds=GPS_TIMEOUT, timing_enabled=track_configured))
         self.history = deque(maxlen=1000)
+        self.brake_history = deque(maxlen=1000)
         self.generation = 0
         self.brake_seen = False
         self.connection_changed(f"Opening {port}…")
@@ -136,6 +157,7 @@ class SerialBench:
             self.rmc_time = None
             self.position = None
             self.history.clear()
+            self.brake_history.clear()
             self.generation += 1
             self.revision = 0
             self.lap.interrupt()
@@ -145,7 +167,7 @@ class SerialBench:
             return  # Incomplete frame, or a line longer than the read limit.
         frame = line.rstrip(b"\r\n")
         now = time.monotonic()
-        if self.throttle_only:
+        if self.throttle_only or frame.startswith(b"UMR_THROTTLE,"):
             self.receive_throttle(frame, now)
             return
 
@@ -153,6 +175,8 @@ class SerialBench:
         if brake is not None or frame == b"BRAKE_I2C_ERROR":
             volts = None if brake is None else float(brake[1])
             with self.lock:
+                if self.brake_time is not None and now - self.brake_time > SENSOR_TIMEOUT:
+                    self.brake_history.append((None, None))
                 self.brake_seen = True
                 self.brake_voltage = volts
                 self.brake_time = now
@@ -162,6 +186,8 @@ class SerialBench:
                     self.brake_status = ""
                 else:
                     self.brake_status = "Brake voltage outside the 0–5 V input range"
+                self.brake_history.append((now - self.origin_time, self.brake_calibration.percent(volts)))
+                self.revision += 1
             return
 
         fields = checked_nmea(frame)
@@ -233,6 +259,11 @@ class SerialBench:
             times = [point[0] for point in self.history]
             values = [point[1] for point in self.history]
             return [times, values], self.revision, self.generation
+
+    def pedal_history(self):
+        with self.lock:
+            throttle = list(self.history) if self.calibration is not None else []
+            return throttle, list(self.brake_history), self.revision, self.generation
 
     def lap_snapshot(self):
         with self.lock:
