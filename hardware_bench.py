@@ -19,6 +19,7 @@ VOLTS_PER_COUNT = 4.096 / 32768  # ADS1115 gain setting in the bench sketch.
 SENSOR_TIMEOUT = 2.0
 GPS_TIMEOUT = 3.0
 THROTTLE_FRAME = re.compile(rb"UMR_THROTTLE,(-?[0-9]{1,5})?")
+BRAKE_FRAME = re.compile(rb"BRAKE_V=(-?[0-9]\.[0-9]{3})")
 NMEA_FRAME = re.compile(rb"\$([A-Z]{2}[A-Z0-9]{3},[\x20-\x29\x2b-\x7e]+)\*([0-9A-Fa-f]{2})")
 
 
@@ -120,6 +121,7 @@ class SerialBench:
         self.lap = LapAnalysis(LapTimer(maximum_gap_seconds=GPS_TIMEOUT, timing_enabled=track_configured))
         self.history = deque(maxlen=1000)
         self.generation = 0
+        self.brake_seen = False
         self.connection_changed(f"Opening {port}…")
 
     def connection_changed(self, status):
@@ -127,6 +129,9 @@ class SerialBench:
             self.status = status
             self.counts = None
             self.sensor_time = None
+            self.brake_voltage = None
+            self.brake_time = None
+            self.brake_status = "Waiting for brake data"
             self.nmea_time = None
             self.rmc_time = None
             self.position = None
@@ -142,6 +147,21 @@ class SerialBench:
         now = time.monotonic()
         if self.throttle_only:
             self.receive_throttle(frame, now)
+            return
+
+        brake = BRAKE_FRAME.fullmatch(frame)
+        if brake is not None or frame == b"BRAKE_I2C_ERROR":
+            volts = None if brake is None else float(brake[1])
+            with self.lock:
+                self.brake_seen = True
+                self.brake_voltage = volts
+                self.brake_time = now
+                if volts is None:
+                    self.brake_status = "ADS1115 communication error"
+                elif 0 <= volts <= 5:
+                    self.brake_status = ""
+                else:
+                    self.brake_status = "Brake voltage outside the 0–5 V input range"
             return
 
         fields = checked_nmea(frame)
@@ -190,6 +210,14 @@ class SerialBench:
     def connection_status(self):
         with self.lock:
             return self.status
+
+    def brake_snapshot(self):
+        with self.lock:
+            if self.brake_time is None:
+                return self.brake_seen, None, self.brake_status
+            if time.monotonic() - self.brake_time > SENSOR_TIMEOUT:
+                return self.brake_seen, None, "Brake data stale"
+            return self.brake_seen, self.brake_voltage, self.brake_status
 
     def sensor_snapshot(self):
         with self.lock:

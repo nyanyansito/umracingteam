@@ -666,6 +666,7 @@ def update_hardware_cards(include_figure):
     source = hardware_source
     throttle_only = source.throttle_only
     value, detail, age_label = "—", "", ""
+    brake_value, brake_detail, show_brake = "—", "", False
     figure = None
     if throttle_only:
         status, detail, counts, age = source.sensor_snapshot()
@@ -686,16 +687,24 @@ def update_hardware_cards(include_figure):
             figure = make_throttle_bench_figure(*arrays, millivolts=calibration is None)
     else:
         status = source.connection_status()
+        show_brake, brake_volts, brake_detail = source.brake_snapshot()
+        if brake_volts is not None:
+            brake_value = f"{brake_volts:.3f} V"
 
     outputs = []
     for key, _, title in METRIC_BOXES:
         if throttle_only and key == "throttle":
             outputs += ["Throttle Bench", box_style, detail]
+        elif show_brake and key == "brake":
+            style = alert_box_style if brake_detail else box_style
+            outputs += ["Brake Sensor Voltage", style, brake_detail]
         else:
             outputs += [title, {"display": "none"}, ""]
     link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
     label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS"
-    return (value, "—", "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
+    if show_brake:
+        label = "Hardware data · GPS and brake"
+    return (value, brake_value, "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
                 **validation_base_style, "backgroundColor": "#e2e8f0", "color": "#172033",
             })
 
