@@ -4,8 +4,8 @@ The current development pipeline is:
 
 Simulated STM32 → binary TCP byte stream standing in for UART → simulated
 ESP32 → MQTT → validation, recording and live dashboard.
-GPS is a separate MQTT simulator in that pipeline. The hardware bench modes
-below feed real GPS or standalone throttle data into the Pit Wall dashboard.
+GPS is a separate MQTT simulator in that pipeline. Hardware mode receives
+real GPS data wirelessly through the ESP32 TCP bridge.
 
 ## Setup
 
@@ -19,99 +19,56 @@ python -m pip install -r requirements.txt
 
 Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
 
-### Test real GPS over USB or Wi-Fi
+### Test real GPS over Wi-Fi
 
-1. With power off, connect **GPS TX → STM32 PA3** and **GPS GND → STM32 GND**.
-   Use the GPS breakout's verified supply and 3.3 V UART levels. Leave GPS
-   RX disconnected. Both STM32 GPS sketches listen at 9600 baud.
-2. In **Arduino IDE**, select **Generic STM32F4 series** and
-   **Generic F407VGTx** for the STM32F407VGT6. Select the sketch for your
-   connection and upload it using STM32CubeProgrammer SWD.
+The hardware test passed with both sketches below. The laptop received real GPS
+NMEA sentences and the `STM32_ALIVE` heartbeat through the ESP32 TCP bridge.
 
-   | Connection | Sketch and setup |
-   |---|---|
-   | USB | Open [gps_usb_bench.ino](firmware/gps_usb_bench/gps_usb_bench.ino). Set **Tools → USB support → CDC (generic 'Serial' supersede U(S)ART)**. Connect the STM32 USB to your laptop after uploading. |
-   | Wi-Fi | Open [gps_wifi_stm32.ino](firmware/gps_wifi_stm32/gps_wifi_stm32.ino). Use the [ESP32 bridge](firmware/telemetry_wifi_esp32/telemetry_wifi_esp32.ino) and connect **STM32 PB10 → ESP32 GPIO18** plus **GND → GND**. Join `UMR-GPS-Test` with password `UMR-Bench-2026`. |
+| Board | Sketch | Arduino IDE settings |
+|---|---|---|
+| STM32F407VGT6 | [STM32_wireless.ino](firmware/STM32_wireless/STM32_wireless.ino) | **Generic STM32F4 series → Generic F407VGTx**, upload using **STM32CubeProgrammer (SWD)** and ST-LINK |
+| ESP32-S3 | [telemetry_wifi_esp32.ino](firmware/telemetry_wifi_esp32/telemetry_wifi_esp32.ino) | **ESP32S3 Dev Module**, upload using the ESP32 USB port |
 
-3. Close **Arduino IDE → Serial Monitor** and stop any dashboard already
-   using port 8050. In the **VS Code PowerShell terminal** in the repo folder,
-   run the command for your connection:
+With power off, connect the boards as follows:
+
+| From | To | UART setting |
+|---|---|---|
+| GPS `TX` | STM32 `PA3` | 9600 baud |
+| STM32 `PB10` | ESP32 `GPIO18` | 115200 baud |
+| GPS, STM32 and ESP32 `GND` | Shared ground | |
+
+Use the verified 3.3 V supply for the tested GPS breakout. Leave GPS `RX`
+and `PPS` open. After uploading, disconnect ST-LINK. Power the boards
+independently of the laptop for an untethered test.
+
+1. Join **`UMR-GPS-Test`** with password **`UMR-Bench-2026`**. Stay connected
+   if Windows says there is no internet access.
+2. In **VS Code → PowerShell terminal**, from the repository folder, run:
 
    ```powershell
-   # USB (replace COM5 with the STM32's actual COM port)
-   python dashboard.py --hardware-port COM5
-
-   # Wi-Fi
    python dashboard.py --hardware-port "socket://192.168.4.1:9000"
    ```
 
-   Open [the dashboard](http://127.0.0.1:8050). USB and Wi-Fi hardware mode
-   connect directly to the boards and work with Mosquitto and the simulators stopped.
-4. Give the GPS antenna a clear view of the sky. **No GPS fix** means an RMC
-   sentence arrived without a usable position. **Waiting for GPS NMEA** means
-   the dashboard has no recent checksum-valid NMEA sentence. A valid RMC
-   position displays latitude and longitude and adds a point to the GPS trace.
-   The coordinates and trace clear on fix loss or timeout. To inspect the USB
-   stream directly, stop the dashboard and open **Arduino IDE → Serial Monitor**
-   at **115200 baud**. Look for GPS sentences such as `$GNRMC` or `$GPRMC`.
-   To enable lap timing, configure the real circuit in a custom `UMR_CONFIG`
-   file with a unique track ID, finish endpoints, lap distance and checkpoints.
+   Open [the dashboard](http://127.0.0.1:8050). This mode uses the ESP32 TCP
+   stream and works with Mosquitto and the simulators stopped.
+3. Give the GPS antenna a clear view of the sky. **No GPS fix** means an
+   RMC sentence arrived without a usable position. **Waiting for GPS NMEA**
+   means the dashboard has no recent checksum-valid NMEA sentence. A valid
+   fix displays coordinates and adds a point to the GPS trace.
 
-### Test the unplugged throttle by itself
+To inspect the raw stream, stop the dashboard first. The ESP32 accepts one
+TCP client at a time. In **VS Code → PowerShell terminal**, run:
 
-This bench test uses the pedal's measured teal-to-black resistance change
-to display movement on the Pit Wall dashboard. Use the loose pedal, the
-STM32F407, the ADS1115, a **33 kΩ** resistor and a **3.3 kΩ** resistor.
-Keep the pedal completely disconnected from the car and inverter. The
-small test voltage comes through the resistors below. Leave the pedal's
-red and yellow wires isolated.
+```powershell
+python -u -c "import socket, sys; s=socket.create_connection(('192.168.4.1',9000),5); sys.stdout.buffer.writelines(iter(lambda: s.recv(4096), b''))"
+```
 
-1. Turn off bench power and keep the pedal disconnected while building this
-   circuit. Connect the ADS1115 to the STM32 as below.
+`STM32_ALIVE` confirms the STM32 UART link and Wi-Fi bridge are working.
+`$GNRMC` or `$GNGGA` confirms GPS data is reaching the laptop. Stop the raw
+reader with **Ctrl+C** before reopening the dashboard.
 
-   | From | To |
-   |---|---|
-   | ADS1115 VDD | Bench 3.3 V |
-   | ADS1115 GND and ADDR | STM32 ground |
-   | ADS1115 SDA / SCL | STM32 PB7 / PB6, with 3.3 V I²C pull-ups |
-   | Bench 3.3 V | One end of the **33 kΩ** resistor |
-   | Other end of **33 kΩ** | ADS1115 **AIN1** |
-   | ADS1115 **AIN1** | One end of the **3.3 kΩ** resistor |
-   | Other end of **3.3 kΩ** | STM32 ground |
-
-2. Power up and check **AIN1 to STM32 ground** on DC volts with the pedal
-   still disconnected. It should read about **0.30 V**. This divider limits
-   the pedal test current to about **0.10 mA** at 3.3 V. Turn off bench power
-   again. Connect the pedal-side **teal to AIN1** and **black to STM32
-   ground**, then power up. Black is the reference for this two-wire
-   resistance test. The vehicle pin functions and pedal supply are separate
-   measurements.
-3. Upload [`throttle_bench.ino`](firmware/throttle_bench/throttle_bench.ino)
-   using the STM32 board and USB CDC settings above. Close Arduino Serial
-   Monitor and stop any old dashboard on port 8050. From the repo folder run:
-
-   ```powershell
-   python dashboard.py --hardware-port COM5 --throttle-bench
-   ```
-
-   Replace COM5 with the STM32's actual port and open
-   [the dashboard](http://127.0.0.1:8050). Watch the **Throttle Bench** card
-   and the first history plot. With a teal-to-black resistance of roughly
-   700–1,470 Ω, the divider predicts about **57–99 mV**. Press and release
-   the pedal a few times and verify that the value moves and returns.
-4. To show an estimated travel percentage, restart the dashboard using
-   **your measured** released and fully pressed millivolt values, in that
-   order. For example:
-
-   ```powershell
-   python dashboard.py --hardware-port COM5 --throttle-bench --throttle-calibration-mv 57 99
-   ```
-
-   The percentage uses a linear scale between the two measured endpoints.
-   For Wi-Fi, the same sketch sends frames on STM32 PB10 at 115200. Connect
-   PB10 to GPIO18 and join grounds with the existing
-   [ESP32 bridge](firmware/telemetry_wifi_esp32). Join its access point
-   and replace COM5 with `socket://192.168.4.1:9000`.
+To enable lap timing, configure the real circuit in a custom `UMR_CONFIG` file
+with a unique track ID, finish endpoints, lap distance and checkpoints.
 
 ### Start everything with one command
 
@@ -338,8 +295,8 @@ GPS outages and first-lap timing, counter resets/rollover, gateway retry
 heartbeats, recording/replay, framing recovery, and a fixed firmware wire vector.
 See `telemetry-packet.md` for the finalized CRC and exact packet bytes.
 
-Fast simulation now targets 100 Hz; this does not establish physical UART or
-Wi-Fi performance. The GPS bench sends NMEA over USB or through the ESP32 TCP bridge.
+Fast simulation targets 100 Hz. The verified hardware GPS stream uses NMEA over
+the ESP32 TCP bridge.
 The STM32-to-ESP32 binary UART and Wi-Fi/MQTT path still needs vehicle firmware
 and bench verification. Configure the intended MQTT broker and circuit with
 `telemetry-config.example.json`.
