@@ -525,11 +525,9 @@ def lap_table(state):
     ])
 
 
-def channel_range(field, values, *, steering_voltage=False, throttle_millivolts=False):
+def channel_range(field, values, *, throttle_millivolts=False):
     spec = CHANNEL_SPECS[field]
     low, high = spec["min_value"], spec["max_value"]
-    if field == "steering_degrees" and steering_voltage:
-        low, high = 0, 3.3
     if field == "throttle_percent" and throttle_millivolts:
         low, high = 0, 120
     finite = [v for v in values if is_number(v)]
@@ -538,17 +536,16 @@ def channel_range(field, values, *, steering_voltage=False, throttle_millivolts=
     return [low, high if high > low else low + 1]
 
 
-def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed,
-                       *, steering_voltage=False, throttle_millivolts=False):
+def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed):
     figure = make_subplots(
         rows=4,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.07,
         subplot_titles=(
-            "Throttle Bench Voltage" if throttle_millivolts else "Throttle Position",
+            "Throttle Position",
             "Brake Pressure",
-            "Steering Sensor Voltage" if steering_voltage else "Steering Angle",
+            "Steering Angle",
             "Vehicle Speed",
         ),
     )
@@ -602,8 +599,8 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     )
 
     figure.update_yaxes(
-        title_text="Throttle bench (mV)" if throttle_millivolts else "Throttle (%)",
-        range=channel_range("throttle_percent", graph_throttle, throttle_millivolts=throttle_millivolts),
+        title_text="Throttle (%)",
+        range=channel_range("throttle_percent", graph_throttle),
         row=1,
         col=1,
     )
@@ -616,8 +613,8 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     )
 
     figure.update_yaxes(
-        title_text="Steering (V)" if steering_voltage else "Steering (°)",
-        range=channel_range("steering_degrees", graph_steering, steering_voltage=steering_voltage),
+        title_text="Steering (°)",
+        range=channel_range("steering_degrees", graph_steering),
         row=3,
         col=1,
     )
@@ -648,46 +645,57 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     return figure
 
 
+def make_throttle_bench_figure(times, values, *, millivolts):
+    return go.Figure(
+        data=[go.Scatter(x=times, y=values, mode="lines", line={"color": "#22c55e"})],
+        layout={
+            "template": "plotly_dark",
+            "paper_bgcolor": "#0b1120",
+            "plot_bgcolor": "#172033",
+            "title": "Throttle Bench History",
+            "xaxis_title": "Time (seconds)",
+            "yaxis_title": "Throttle (mV)" if millivolts else "Throttle (%)",
+            "yaxis_range": channel_range("throttle_percent", values, throttle_millivolts=millivolts),
+        },
+    )
+
+
 def update_hardware_cards(include_figure):
     from hardware_bench import ThrottleCalibration, VOLTS_PER_COUNT
 
-    status, sensor_status, counts, age = hardware_source.sensor_snapshot()
-    calibration = hardware_source.calibration
-    throttle_only = hardware_source.throttle_only
-    channel = "throttle" if throttle_only else "steering"
-    value, detail = "—", sensor_status
-    if counts is not None and throttle_only:
-        millivolts = counts * VOLTS_PER_COUNT * 1000
-        percent = None if calibration is None else calibration.percent(millivolts)
-        value = f"{millivolts:.1f} mV" if percent is None else f"{percent:.1f} %"
-        detail = f"{millivolts:.1f} mV · {counts} ADC counts"
-        if not ThrottleCalibration.in_fixture_range(millivolts):
-            detail += " · Check pedal and resistor connections"
-        elif percent is None:
-            detail += " · Calibration required for %"
-    elif counts is not None:
-        volts = counts * VOLTS_PER_COUNT
-        angle = None if calibration is None else calibration.angle(volts)
-        value = f"{volts:.4f} V" if angle is None else f"{angle:.2f}°"
-        detail = f"{volts:.4f} V · {counts} ADC counts" if angle is not None else f"{counts} ADC counts · "
-        if angle is None:
-            detail += "Angle calibration required" if calibration is None else "Outside calibration range"
+    source = hardware_source
+    throttle_only = source.throttle_only
+    value, detail, age_label = "—", "", ""
+    figure = None
+    if throttle_only:
+        status, detail, counts, age = source.sensor_snapshot()
+        calibration = source.calibration
+        if counts is not None:
+            millivolts = counts * VOLTS_PER_COUNT * 1000
+            percent = None if calibration is None else calibration.percent(millivolts)
+            value = f"{millivolts:.1f} mV" if percent is None else f"{percent:.1f} %"
+            detail = f"{millivolts:.1f} mV · {counts} ADC counts"
+            if not ThrottleCalibration.in_fixture_range(millivolts):
+                detail += " · Check pedal and resistor connections"
+            elif percent is None:
+                detail += " · Calibration required for %"
+        if age is not None:
+            age_label = f" · last throttle frame {age * 1000:.0f} ms ago"
+        if include_figure:
+            arrays, _, _ = source.sensor_history()
+            figure = make_throttle_bench_figure(*arrays, millivolts=calibration is None)
+    else:
+        status = source.connection_status()
 
     outputs = []
     for key, _, title in METRIC_BOXES:
         if throttle_only and key == "throttle":
-            title = "Throttle Bench"
-        outputs += [title, box_style, detail if key == channel else "Unavailable"]
-    figure = None
-    if include_figure:
-        arrays, _, _ = hardware_source.sensor_history()
-        figure = make_sensor_figure(*arrays, steering_voltage=not throttle_only and calibration is None,
-                                    throttle_millivolts=throttle_only and calibration is None)
-    age_label = "" if age is None else f" · last {channel} frame {age * 1000:.0f} ms ago"
-    link = "ESP32 Wi-Fi" if hardware_source.port.startswith("socket://") else "STM32 USB"
-    throttle, steering = (value, "—") if throttle_only else ("—", value)
-    label = "Hardware data · throttle bench" if throttle_only else "Hardware data · steering and GPS"
-    return (throttle, "—", steering, "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
+            outputs += ["Throttle Bench", box_style, detail]
+        else:
+            outputs += [title, {"display": "none"}, ""]
+    link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
+    label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS"
+    return (value, "—", "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
                 **validation_base_style, "backgroundColor": "#e2e8f0", "color": "#172033",
             })
 
@@ -816,25 +824,24 @@ def update_sensor_cards(n):
               Input("return-live", "n_clicks"), State("sensor-view-state", "data"),
               running=[(Output("sensor-update", "disabled"), True, False)])
 def update_sensor_graph(_, live_revision, previous):
-    steering_voltage = False
-    throttle_millivolts = False
-    if hardware_source is not None:
-        arrays, revision, generation = hardware_source.sensor_history()
-        steering_voltage = not hardware_source.throttle_only and hardware_source.calibration is None
-        throttle_millivolts = hardware_source.throttle_only and hardware_source.calibration is None
+    source = hardware_source
+    if source is not None:
+        if not source.throttle_only:
+            return no_update, no_update, no_update
+        arrays, revision, generation = source.sensor_history()
+        millivolts = source.calibration is None
+        ranges = [channel_range("throttle_percent", arrays[1], throttle_millivolts=millivolts)]
     else:
         with telemetry_lock:
             arrays = [list(h) for h in (time_history, throttle_history, brake_history, steering_history, speed_history)]
             revision, generation = history_revision, history_generation
-    ranges = [channel_range(field, values, steering_voltage=steering_voltage,
-                            throttle_millivolts=throttle_millivolts)
-              for field, values in zip(FAST_FIELDS, arrays[1:])]
+        ranges = [channel_range(field, values) for field, values in zip(FAST_FIELDS, arrays[1:])]
     current = {"revision": revision, "generation": generation, "live": live_revision, "ranges": ranges}
     added = revision - previous["revision"] if previous else 0
     if (not previous or previous["generation"] != generation or previous["live"] != live_revision
             or added < 0 or added > len(arrays[0])):
-        figure = make_sensor_figure(*arrays, steering_voltage=steering_voltage,
-                                    throttle_millivolts=throttle_millivolts)
+        figure = (make_throttle_bench_figure(*arrays, millivolts=millivolts)
+                  if source is not None else make_sensor_figure(*arrays))
         figure.update_layout(uirevision=f"sensors:{generation}:{live_revision}")
         return figure, no_update, current
     figure = no_update
@@ -844,7 +851,9 @@ def update_sensor_graph(_, live_revision, previous):
             figure["layout"]["yaxis" + (str(i) if i > 1 else "")]["range"] = bounds
     if not added:
         return figure, no_update, current
-    return figure, [{"x": [arrays[0][-added:]] * 4, "y": [values[-added:] for values in arrays[1:]]}, [0, 1, 2, 3], 1000], current
+    traces = list(range(len(ranges)))
+    return figure, [{"x": [arrays[0][-added:]] * len(traces),
+                     "y": [values[-added:] for values in arrays[1:]]}, traces, 1000], current
 
 
 @app.callback(Output("lap-metrics", "children"), Output("lap-status", "children"),
@@ -861,8 +870,10 @@ def update_lap_views(n, colour, inspection, live_revision, previous, previous_in
     identity = [state["lap_key"], state["revision"], colour, live_revision, is_number(inspection)]
     track, track_meta = stream_figure(track, (previous or {}).get("track"), identity)
     delta, delta_meta = stream_figure(delta, (previous or {}).get("delta"), identity)
-    inputs, inputs_meta = stream_figure(lap_input_figure(state, inspection, live_revision), previous_inputs,
-                                       [state["lap_key"], state["revision"], live_revision])
+    inputs, inputs_meta = no_update, no_update
+    if hardware_source is None:
+        inputs, inputs_meta = stream_figure(lap_input_figure(state, inspection, live_revision), previous_inputs,
+                                           [state["lap_key"], state["revision"], live_revision])
     options = [{"label": "Session best (automatic)", "value": "best"}] + [
         {"label": f"Lap {number}", "value": number} for number in state.get("reference_choices", [])]
     return cards, status, track, delta, history, {"track": track_meta, "delta": delta_meta}, inputs, inputs_meta, options
@@ -905,34 +916,30 @@ def main():
     parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
     parser.add_argument("--hardware-port", metavar="PORT",
                         help="STM32 USB port (COM5) or ESP32 TCP stream (socket://192.168.4.1:9000)")
-    parser.add_argument("--steering-calibration", nargs=3, type=float,
-                        metavar=("CCW_VOLTS", "CENTER_VOLTS", "CW_VOLTS"))
-    parser.add_argument("--steering-span-deg", type=float, default=10.0,
-                        help="Angle from center at each calibration endpoint (default: 10 degrees)")
     parser.add_argument("--throttle-bench", action="store_true",
                         help="Read the standalone STM32 throttle bench sketch")
     parser.add_argument("--throttle-calibration-mv", nargs=2, type=float, metavar=("RELEASED", "PRESSED"),
                         help="Show bench throttle percentage using measured endpoint voltages in mV")
     args = parser.parse_args()
-    steering_options = args.steering_calibration is not None or args.steering_span_deg != 10.0
-    if args.throttle_bench and (not args.hardware_port or steering_options):
-        parser.error("--throttle-bench requires --hardware-port and uses only throttle calibration.")
+    if args.throttle_bench and not args.hardware_port:
+        parser.error("--throttle-bench requires --hardware-port.")
     if args.throttle_calibration_mv is not None and not args.throttle_bench:
         parser.error("--throttle-calibration-mv requires --throttle-bench.")
     if args.hardware_port:
-        from hardware_bench import SerialBench, SteeringCalibration, ThrottleCalibration
+        from hardware_bench import SerialBench, ThrottleCalibration
 
         calibration = None
         try:
             if args.throttle_calibration_mv is not None:
                 calibration = ThrottleCalibration(*args.throttle_calibration_mv)
-            elif args.steering_calibration:
-                calibration = SteeringCalibration(*args.steering_calibration, args.steering_span_deg)
         except ValueError as error:
             parser.error(str(error))
         hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench)
         reader = threading.Thread(target=hardware_source.read, name="hardware-telemetry", daemon=True)
         reader.start()
+        app.layout["lap-input-graphs"].style = {"display": "none"}
+        if not args.throttle_bench:
+            app.layout["telemetry-graphs"].style = {"display": "none"}
         print(f"Starting hardware telemetry at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
         try:
             app.run(debug=False, host=DASHBOARD_HOST, port=DASHBOARD_PORT)
@@ -941,8 +948,6 @@ def main():
             reader.join()
             hardware_source = None
         return
-    if steering_options:
-        parser.error("Steering calibration requires --hardware-port.")
 
     print(f"Starting dashboard at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     start_mqtt(mqtt_client, BROKER, PORT)

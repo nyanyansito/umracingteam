@@ -4,8 +4,8 @@ The current development pipeline is:
 
 Simulated STM32 → binary TCP byte stream standing in for UART → simulated
 ESP32 → MQTT → validation, recording and live dashboard.
-GPS is a separate MQTT simulator in that pipeline. The USB hardware bench mode
-below feeds real steering and GPS into the same Pit Wall dashboard.
+GPS is a separate MQTT simulator in that pipeline. The hardware bench modes
+below feed real GPS or standalone throttle data into the Pit Wall dashboard.
 
 ## Setup
 
@@ -19,71 +19,41 @@ python -m pip install -r requirements.txt
 
 Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
 
-### Test real steering and GPS over STM32 USB
+### Test real GPS over USB or Wi-Fi
 
-Use the [STM32 bench sketch](firmware/steering_gps_bench)
-and run the Pit Wall dashboard in hardware mode. It reads the STM32 directly
-over USB and uses the original steering card, telemetry history and GPS track
-trace. Throttle, brake pressure and the vehicle-speed channel display as
-unavailable until those sensors are connected. This mode requires no Mosquitto,
-ESP32 or simulator processes.
+1. With power off, connect **GPS TX → STM32 PA3** and **GPS GND → STM32 GND**.
+   Use the GPS breakout's verified supply and 3.3 V UART levels. Leave GPS
+   RX disconnected. Both STM32 GPS sketches listen at 9600 baud.
+2. In **Arduino IDE**, select **Generic STM32F4 series** and
+   **Generic F407VGTx** for the STM32F407VGT6. Select the sketch for your
+   connection and upload it using STM32CubeProgrammer SWD.
 
-1. Wire the inputs with power off. The wiring follows the UMR bench plan.
-
-   | Connection | Pin or setting |
+   | Connection | Sketch and setup |
    |---|---|
-   | P3022 signal | ADS1115 AIN0 |
-   | ADS1115 SCL / SDA | STM32 PB6 / PB7, with I²C pull-ups to 3.3 V |
-   | ADS1115 ADDR | GND for address 0x48 |
-   | NEO-M8N TX | STM32 PA3 (USART2 RX) at 9600 baud |
-   | Ground | Common ground for STM32, GPS, ADS1115 and P3022 |
+   | USB | Open [gps_usb_bench.ino](firmware/gps_usb_bench/gps_usb_bench.ino). Set **Tools → USB support → CDC (generic 'Serial' supersede U(S)ART)**. Connect the STM32 USB to your laptop after uploading. |
+   | Wi-Fi | Open [gps_wifi_stm32.ino](firmware/gps_wifi_stm32/gps_wifi_stm32.ino). Use the [ESP32 bridge](firmware/telemetry_wifi_esp32/telemetry_wifi_esp32.ino) and connect **STM32 PB10 → ESP32 GPIO18** plus **GND → GND**. Join `UMR-GPS-Test` with password `UMR-Bench-2026`. |
 
-   Power the P3022 and ADS1115 with the verified 3.3 V setup from the bench
-   plan. Check that the P3022 output stays within the ADS1115's 0 V to VDD
-   operating range across the tested movement. Use the GPS breakout's verified
-   supply and 3.3 V UART levels. The sketch only reads GPS, so the GPS RX pin
-   may be left open. PA2 is reserved as the USART2 TX pin in the sketch.
-
-2. Open the sketch in Arduino IDE. For the STM32F407VGT6, select
-   **Generic STM32F4 series**, board part **Generic F407VGTx**, and
-   **USB support → CDC (generic 'Serial' supersede U(S)ART)**. Use your
-   working STM32CubeProgrammer SWD upload setup, then connect the STM32 USB CDC
-   port to the laptop. The sketch configures USART2 for GPS and uses the
-   STM32 core's built-in Wire library.
-3. Close Arduino Serial Monitor so the dashboard can open the COM port. Stop
-   any dashboard already using port 8050. From the repository folder with your
-   Python environment active, run:
+3. Close **Arduino IDE → Serial Monitor** and stop any dashboard already
+   using port 8050. In the **VS Code PowerShell terminal** in the repo folder,
+   run the command for your connection:
 
    ```powershell
-   python -m pip install -r requirements.txt
+   # USB (replace COM5 with the STM32's actual COM port)
    python dashboard.py --hardware-port COM5
+
+   # Wi-Fi
+   python dashboard.py --hardware-port "socket://192.168.4.1:9000"
    ```
 
-   Use the port Windows assigns to the STM32 after uploading if it changed.
-   Open [the dashboard](http://127.0.0.1:8050).
-
-4. Turn the steering wheel slowly on the bench. Check that the steering card's
-   voltage and ADC counts change. Live Telemetry History plots steering voltage
-   until calibration is provided. Measure the voltage at a known
-   counterclockwise angle,
-   at center, and at an equal clockwise angle. Supply those three voltages to
-   get signed degrees. For example, using the prior bench measurements at
-   −10°, center, and +10°:
-
-   ```powershell
-   python dashboard.py --hardware-port COM5 --steering-calibration 1.2 1.4 1.7 --steering-span-deg 10
-   ```
-
-   Clockwise is positive. Keep the tested range away from the sensor's wrap
-   point. The card and steering plot display degrees within the measured
-   calibration range. Voltage and counts remain visible on the card beyond it. Re-measure the three points
-   with the wheel installed if the earlier voltages were measured on the
-   sensor shaft alone.
-5. Give the GPS antenna a clear view of the sky. **No GPS fix** means an RMC
+   Open [the dashboard](http://127.0.0.1:8050). USB and Wi-Fi hardware mode
+   connect directly to the boards and work with Mosquitto and the simulators stopped.
+4. Give the GPS antenna a clear view of the sky. **No GPS fix** means an RMC
    sentence arrived without a usable position. **Waiting for GPS NMEA** means
    the dashboard has no recent checksum-valid NMEA sentence. A valid RMC
-   position displays latitude and longitude and adds a point to the GPS
-   trace. The current coordinates and trace clear on fix loss or timeout.
+   position displays latitude and longitude and adds a point to the GPS trace.
+   The coordinates and trace clear on fix loss or timeout. To inspect the USB
+   stream directly, stop the dashboard and open **Arduino IDE → Serial Monitor**
+   at **115200 baud**. Look for GPS sentences such as `$GNRMC` or `$GPRMC`.
    To enable lap timing, configure the real circuit in a custom `UMR_CONFIG`
    file with a unique track ID, finish endpoints, lap distance and checkpoints.
 
@@ -140,7 +110,7 @@ red and yellow wires isolated.
    The percentage uses a linear scale between the two measured endpoints.
    For Wi-Fi, the same sketch sends frames on STM32 PB10 at 115200. Connect
    PB10 to GPIO18 and join grounds with the existing
-   [ESP32 bridge](firmware/steering_gps_wifi_esp32). Join its access point
+   [ESP32 bridge](firmware/telemetry_wifi_esp32). Join its access point
    and replace COM5 with `socket://192.168.4.1:9000`.
 
 ### Start everything with one command
@@ -369,7 +339,7 @@ heartbeats, recording/replay, framing recovery, and a fixed firmware wire vector
 See `telemetry-packet.md` for the finalized CRC and exact packet bytes.
 
 Fast simulation now targets 100 Hz; this does not establish physical UART or
-Wi-Fi performance. The steering/GPS USB bench path is wired directly to the laptop.
+Wi-Fi performance. The GPS bench sends NMEA over USB or through the ESP32 TCP bridge.
 The STM32-to-ESP32 binary UART and Wi-Fi/MQTT path still needs vehicle firmware
 and bench verification. Configure the intended MQTT broker and circuit with
 `telemetry-config.example.json`.

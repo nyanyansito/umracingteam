@@ -16,7 +16,7 @@ class ThrottleBenchTest(unittest.TestCase):
         self.assertEqual(card, "57.0 mV")
         self.assertEqual(steering, "—")
         self.assertEqual(list(figure.data[0].y), [57.0])
-        self.assertEqual(list(figure.data[2].y), [None])
+        self.assertEqual(len(figure.data), 1)
 
     def test_calibrated_frames_keep_missing_and_open_readings_off_the_plot(self):
         source = SerialBench("COM5", ThrottleCalibration(57, 99), throttle_only=True)
@@ -26,10 +26,21 @@ class ThrottleBenchTest(unittest.TestCase):
         self.assertEqual(arrays[1], [0, 50, 100, None, None])
         self.assertIsNone(source.sensor_snapshot()[2])
 
-    def test_steering_mode_still_uses_the_steering_frame(self):
+    def test_gps_mode_ignores_legacy_steering_and_throttle_frames(self):
         source = SerialBench("COM5")
         source.receive(b"UMR_THROTTLE,456\n")
         source.receive(b"UMR_STEERING,12000\n")
-        arrays, _, _ = source.sensor_history()
-        self.assertEqual(arrays[1], [None])
-        self.assertEqual(arrays[3], [1.5])
+        arrays, revision, _ = source.sensor_history()
+        self.assertEqual((arrays, revision), ([[], []], 0))
+
+        rmc = b"GNRMC,043806.00,A,0307.0000,N,10139.0000,E,0.0,0.0,221126,,,A"
+        checksum = 0
+        for byte in rmc:
+            checksum ^= byte
+        source.receive(b"$" + rmc + f"*{checksum:02X}\r\n".encode())
+        self.assertEqual(source.lap_snapshot()["hardware_gps_status"], "GPS fix · 3.116667°, 101.650000°")
+
+        with patch.object(dashboard, "hardware_source", source):
+            cards = dashboard.update_hardware_cards(True)
+        self.assertIsNone(cards[5])
+        self.assertEqual(cards[-2], "Hardware data · GPS")
