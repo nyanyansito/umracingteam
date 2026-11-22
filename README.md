@@ -87,6 +87,62 @@ ESP32 or simulator processes.
    To enable lap timing, configure the real circuit in a custom `UMR_CONFIG`
    file with a unique track ID, finish endpoints, lap distance and checkpoints.
 
+### Test the unplugged throttle by itself
+
+This bench test uses the pedal's measured teal-to-black resistance change
+to display movement on the Pit Wall dashboard. Use the loose pedal, the
+STM32F407, the ADS1115, a **33 kΩ** resistor and a **3.3 kΩ** resistor.
+Keep the pedal completely disconnected from the car and inverter. The
+small test voltage comes through the resistors below. Leave the pedal's
+red and yellow wires isolated.
+
+1. Turn off bench power and keep the pedal disconnected while building this
+   circuit. Connect the ADS1115 to the STM32 as below.
+
+   | From | To |
+   |---|---|
+   | ADS1115 VDD | Bench 3.3 V |
+   | ADS1115 GND and ADDR | STM32 ground |
+   | ADS1115 SDA / SCL | STM32 PB7 / PB6, with 3.3 V I²C pull-ups |
+   | Bench 3.3 V | One end of the **33 kΩ** resistor |
+   | Other end of **33 kΩ** | ADS1115 **AIN1** |
+   | ADS1115 **AIN1** | One end of the **3.3 kΩ** resistor |
+   | Other end of **3.3 kΩ** | STM32 ground |
+
+2. Power up and check **AIN1 to STM32 ground** on DC volts with the pedal
+   still disconnected. It should read about **0.30 V**. This divider limits
+   the pedal test current to about **0.10 mA** at 3.3 V. Turn off bench power
+   again. Connect the pedal-side **teal to AIN1** and **black to STM32
+   ground**, then power up. Black is the reference for this two-wire
+   resistance test. The vehicle pin functions and pedal supply are separate
+   measurements.
+3. Upload [`throttle_bench.ino`](firmware/throttle_bench/throttle_bench.ino)
+   using the STM32 board and USB CDC settings above. Close Arduino Serial
+   Monitor and stop any old dashboard on port 8050. From the repo folder run:
+
+   ```powershell
+   python dashboard.py --hardware-port COM5 --throttle-bench
+   ```
+
+   Replace COM5 with the STM32's actual port and open
+   [the dashboard](http://127.0.0.1:8050). Watch the **Throttle Bench** card
+   and the first history plot. With a teal-to-black resistance of roughly
+   700–1,470 Ω, the divider predicts about **57–99 mV**. Press and release
+   the pedal a few times and verify that the value moves and returns.
+4. To show an estimated travel percentage, restart the dashboard using
+   **your measured** released and fully pressed millivolt values, in that
+   order. For example:
+
+   ```powershell
+   python dashboard.py --hardware-port COM5 --throttle-bench --throttle-calibration-mv 57 99
+   ```
+
+   The percentage uses a linear scale between the two measured endpoints.
+   For Wi-Fi, the same sketch sends frames on STM32 PB10 at 115200. Connect
+   PB10 to GPIO18 and join grounds with the existing
+   [ESP32 bridge](firmware/steering_gps_wifi_esp32). Join its access point
+   and replace COM5 with `socket://192.168.4.1:9000`.
+
 ### Start everything with one command
 
 Activate your virtual environment, then run:
