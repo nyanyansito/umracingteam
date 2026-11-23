@@ -1,4 +1,4 @@
-"""Atomic persistence of completed laps; partial laps always re-arm after restart."""
+"""Atomic JSON storage for telemetry state."""
 import hashlib
 import json
 import os
@@ -22,6 +22,11 @@ def save_session(path, analysis):
             "lap_number": analysis.timer.lap_number, "track_id": analysis.track_id,
             "order": {k: getattr(analysis.timer.order, k) for k in
                       ("session", "timestamp", "sequence", "unwrapped_ms", "generation")}}
+    write_json(path, data)
+
+
+def write_json(path, data):
+    """Replace a JSON file atomically after its new contents have been written."""
     encoded = json.dumps(data, allow_nan=False)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

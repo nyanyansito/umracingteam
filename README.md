@@ -93,10 +93,22 @@ full-scale input. It represents the selected voltage span. Use
 The raw stream still reports `BRAKE_V` in volts. `BRAKE_I2C_ERROR` means the STM32
 could not complete an ADS1115 transfer.
 
-The throttle trace starts when the STM32 sends `UMR_THROTTLE` frames and the
-dashboard is launched with `--throttle-calibration-mv RELEASED PRESSED` using
-measured endpoints for the throttle bench circuit. Until then the throttle
-panel stays empty.
+The throttle card shows raw mV when the STM32 sends `UMR_THROTTLE` frames.
+To enable throttle percentage and its trace, note the mV reading with the pedal
+fully released and then fully pressed. Stop the dashboard with **Ctrl+C** and
+save those two readings from PowerShell:
+
+```powershell
+$released = Read-Host "Throttle mV with pedal fully released"
+$pressed = Read-Host "Throttle mV with pedal fully pressed"
+python dashboard.py --hardware-port "socket://192.168.4.1:9000" --throttle-calibration-mv $released $pressed --save-throttle-calibration
+```
+
+Later, use `python dashboard.py --hardware-port "socket://192.168.4.1:9000"` to reuse
+the saved readings. Calibration is kept locally under `logs/throttle-calibration/`
+for the selected port and mode (combined hardware or `--throttle-bench`). Repeat
+the save command to recalibrate. To use different endpoints for one launch, pass
+`--throttle-calibration-mv` on its own.
 
 ### Start everything with one command
 

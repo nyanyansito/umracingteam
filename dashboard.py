@@ -4,6 +4,7 @@ import time
 import json
 from collections import deque
 from pathlib import Path
+from urllib.parse import quote
 
 import paho.mqtt.client as mqtt
 import plotly.graph_objects as go
@@ -24,6 +25,7 @@ from lap_stream import RemoteLapAnalysis, STATE_TOPIC, UPDATE_TOPIC, REQUEST_TOP
 
 
 TOPIC = "umf1/car01/telemetry/fast"
+THROTTLE_CALIBRATION_DIR = Path(__file__).resolve().parent / "logs" / "throttle-calibration"
 
 # ADDED: validated copy of the fast telemetry, published by data_processing.py
 PROCESSED_TOPIC = "umf1/car01/telemetry/fast/processed"
@@ -902,7 +904,7 @@ def choose_reference(value):
     return "Reference requested for this session" if result.rc == mqtt.MQTT_ERR_SUCCESS else "Lap service unavailable"
 
 
-def main():
+def main(argv=None):
     global hardware_source
 
     parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
@@ -912,25 +914,42 @@ def main():
                         help="Read the standalone STM32 throttle bench sketch")
     parser.add_argument("--throttle-calibration-mv", nargs=2, type=float, metavar=("RELEASED", "PRESSED"),
                         help="Show hardware throttle percentage using measured endpoint voltages in mV")
+    parser.add_argument("--save-throttle-calibration", action="store_true",
+                        help="Save the supplied throttle endpoints for later launches on this hardware port")
     parser.add_argument("--brake-calibration-v", nargs=2, type=float, metavar=("RELEASED", "FULL_SCALE"),
                         help="Set the brake percentage endpoints in volts (default: 0.490 and 4.500 V)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.throttle_bench and not args.hardware_port:
         parser.error("--throttle-bench requires --hardware-port.")
     if args.throttle_calibration_mv is not None and not args.hardware_port:
         parser.error("--throttle-calibration-mv requires --hardware-port.")
+    if args.save_throttle_calibration and args.throttle_calibration_mv is None:
+        parser.error("--save-throttle-calibration requires --throttle-calibration-mv RELEASED PRESSED.")
     if args.brake_calibration_v is not None and (not args.hardware_port or args.throttle_bench):
         parser.error("--brake-calibration-v requires combined hardware mode.")
     if args.hardware_port:
         from hardware_bench import BrakeCalibration, SerialBench, ThrottleCalibration
 
+        mode = "bench" if args.throttle_bench else "hardware"
+        calibration_path = THROTTLE_CALIBRATION_DIR / f"{mode}-{quote(args.hardware_port, safe='')}.json"
         calibration = None
         try:
+            brake_calibration = BrakeCalibration(*args.brake_calibration_v) if args.brake_calibration_v else None
             if args.throttle_calibration_mv is not None:
                 calibration = ThrottleCalibration(*args.throttle_calibration_mv)
-            brake_calibration = BrakeCalibration(*args.brake_calibration_v) if args.brake_calibration_v else None
-        except ValueError as error:
+                if args.save_throttle_calibration:
+                    calibration.save(calibration_path)
+                    print(f"Saved throttle calibration to {calibration_path}")
+        except (OSError, ValueError) as error:
             parser.error(str(error))
+        if calibration is None:
+            try:
+                calibration = ThrottleCalibration.load(calibration_path)
+            except (OSError, ValueError) as error:
+                print(f"Could not read saved throttle calibration at {calibration_path}: {error}")
+            if calibration is not None:
+                print(f"Loaded throttle calibration: {calibration.released_mv:g} mV released, "
+                      f"{calibration.pressed_mv:g} mV pressed")
         hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench,
                                       brake_calibration=brake_calibration)
         reader = threading.Thread(target=hardware_source.read, name="hardware-telemetry", daemon=True)

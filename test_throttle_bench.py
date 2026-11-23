@@ -1,3 +1,5 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -6,6 +8,26 @@ from hardware_bench import SerialBench, ThrottleCalibration
 
 
 class ThrottleBenchTest(unittest.TestCase):
+    def test_dashboard_saves_and_reuses_calibration_for_the_same_port_and_mode(self):
+        port = "socket://192.168.4.1:9000"
+        saved = ThrottleCalibration(92, 60)
+        with (TemporaryDirectory() as directory,
+              patch.object(dashboard, "THROTTLE_CALIBRATION_DIR", Path(directory)),
+              patch.object(SerialBench, "read"),
+              patch.object(dashboard, "app") as app):
+            launches = []
+            app.run.side_effect = lambda **_: launches.append(dashboard.hardware_source.calibration)
+
+            dashboard.main(["--hardware-port", port, "--throttle-calibration-mv", "92", "60",
+                            "--save-throttle-calibration"])
+            dashboard.main(["--hardware-port", port])
+            dashboard.main(["--hardware-port", port, "--throttle-calibration-mv", "80", "70"])
+            dashboard.main(["--hardware-port", port])
+            dashboard.main(["--hardware-port", port, "--throttle-bench"])
+            dashboard.main(["--hardware-port", "COM5"])
+
+        self.assertEqual(launches, [saved, saved, ThrottleCalibration(80, 70), saved, None, None])
+
     def test_raw_throttle_frames_feed_the_card_and_history(self):
         source = SerialBench("COM5", throttle_only=True)
         source.receive(b"UMR_STEERING,1000\n")

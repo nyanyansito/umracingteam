@@ -12,7 +12,9 @@ import serial
 
 from lap_analysis import LapAnalysis
 from lap_timer import LapTimer
+from session_store import write_json
 from telemetry_config import TRACK_ID
+from telemetry_validation import decode_object, is_number
 
 BAUD = 115200
 VOLTS_PER_COUNT = 4.096 / 32768  # ADS1115 gain setting in the bench sketch.
@@ -97,12 +99,23 @@ class ThrottleCalibration:
     @staticmethod
     def in_fixture_range(millivolts):
         # The specified divider reads about 300 mV open and 0 mV shorted.
-        return 5 < millivolts < 250
+        return is_number(millivolts) and 5 < millivolts < 250
 
     def percent(self, millivolts):
         if not self.in_fixture_range(millivolts):
             return None
         return percent_of_span(millivolts, self.released_mv, self.pressed_mv)
+
+    @classmethod
+    def load(cls, path):
+        try:
+            saved = decode_object(path.read_bytes())
+        except FileNotFoundError:
+            return None
+        return cls(saved.get("released_mv"), saved.get("pressed_mv"))
+
+    def save(self, path):
+        write_json(path, {"released_mv": self.released_mv, "pressed_mv": self.pressed_mv})
 
 
 def rmc_fix(fields):
