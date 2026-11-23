@@ -1,0 +1,388 @@
+:root {
+    color-scheme: dark;
+    --page: #0b0e14;
+    --panel: #121720;
+    --line: #2b3544;
+    --text: #f0f4fa;
+    --muted: #a4b1c4;
+    --orange: #ff9655;
+    --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+    background: var(--page);
+}
+
+body {
+    margin: 0;
+}
+
+.pit-wall {
+    box-sizing: border-box;
+    max-width: 1600px;
+    min-height: 100vh;
+    margin-inline: auto;
+    padding: clamp(12px, 2.6vw, 36px);
+    color: var(--text);
+    font-family: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
+    background: radial-gradient(ellipse at 100% 0, #1b1d25, transparent 460px);
+}
+
+.pit-header {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: clamp(12px, 2vw, 24px);
+    min-height: 106px;
+    padding: 16px clamp(14px, 2vw, 26px);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--orange);
+    border-radius: 10px;
+    background:
+        linear-gradient(130deg, transparent 73%, #ff96551c 73% 75%, transparent 75% 76%, #ff96550e 76% 84%, transparent 84%),
+        linear-gradient(100deg, #181f2b, #10141b 75%);
+}
+
+.team-mark {
+    display: flex;
+    flex: 0 0 clamp(58px, 8vw, 98px);
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: clamp(50px, 6vw, 66px);
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #0b1018;
+    color: var(--orange);
+    font-size: clamp(17px, 2.6vw, 27px);
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: -.06em;
+}
+
+.team-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.team-name {
+    margin: 0 0 4px;
+    color: var(--orange);
+    font: 700 11px/1.4 var(--mono);
+    letter-spacing: .16em;
+    text-transform: uppercase;
+}
+
+.pit-header h1 {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+    font-size: clamp(26px, 4vw, 46px);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.055em;
+}
+
+.pit-header h1 span {
+    color: var(--muted);
+    font-size: .38em;
+    font-weight: 500;
+    letter-spacing: .015em;
+}
+
+.status-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px 16px;
+    margin-block: 12px;
+}
+
+.validation-status {
+    padding: 6px 10px;
+    border: 1px solid currentColor;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.validation-status:empty {
+    display: none;
+}
+
+.packet-status,
+.lap-status {
+    margin: 0;
+    color: var(--muted);
+    font: 12px/1.55 var(--mono);
+}
+
+.sensor-metrics,
+.lap-metrics-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.sensor-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+    margin-bottom: 12px;
+}
+
+.lap-metrics-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.lap-metrics {
+    display: contents;
+}
+
+.metric-card {
+    --accent: var(--line);
+    min-width: 0;
+    padding: 11px 14px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    background: var(--panel);
+}
+
+.sensor-metrics .metric-card {
+    padding-block: 13px;
+}
+
+.metric-card--throttle { --accent: #22c55e; }
+.metric-card--brake { --accent: #ef4444; }
+.metric-card--steering { --accent: #fbbf24; }
+.metric-card--speed { --accent: #38bdf8; }
+.metric-card--clock { --accent: var(--orange); }
+
+.metric-label {
+    display: block;
+    margin: 0 0 5px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+
+.metric-value {
+    margin: 0;
+    font: 700 clamp(15px, 1.9vw, 26px)/1.2 var(--mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.055em;
+}
+
+.sensor-metrics .metric-value {
+    font-size: clamp(22px, 3vw, 38px);
+}
+
+.metric-card--clock .metric-value {
+    color: var(--orange);
+}
+
+.metric-detail {
+    min-height: 2.55em;
+    margin: 5px 0 0;
+    color: #c0cbd9;
+    font-size: 12px;
+    line-height: 1.3;
+}
+
+.lap-status {
+    margin-block: 10px;
+}
+
+.pit-controls {
+    --Dash-Text-Strong: var(--text);
+    --Dash-Text-Weak: var(--muted);
+    --Dash-Fill-Inverse-Strong: #0b111a;
+    --Dash-Fill-Interactive-Strong: var(--orange);
+    --Dash-Fill-Interactive-Weak: #1c2634;
+    --Dash-Fill-Disabled: var(--line);
+    --Dash-Shading-Weak: #293345;
+    --Dash-Stroke-Strong: var(--line);
+    display: flex;
+    align-items: end;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    margin-bottom: 12px;
+    padding: 11px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+}
+
+.pit-controls > label {
+    display: grid;
+    flex: 0 1 220px;
+    gap: 4px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.pit-select {
+    color: var(--text);
+}
+
+.pit-controls .pit-select.dash-dropdown {
+    min-height: 36px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+}
+
+.pit-controls .pit-select.dash-dropdown:focus-visible {
+    border-color: var(--orange);
+}
+
+/* Keep the same palette on versions of Dash that use react-select. */
+.pit-select .Select-control,
+.pit-select .Select-menu-outer {
+    background: #0b111a;
+    border-color: var(--line);
+}
+
+.pit-select .Select.has-value .Select-value-label,
+.pit-select .Select-input > input {
+    color: var(--text);
+}
+
+.pit-select .VirtualizedSelectFocusedOption {
+    background: #293345;
+}
+
+#return-live {
+    min-height: 36px;
+    padding: 6px 13px;
+    border: 1px solid #9b5b38;
+    border-radius: 5px;
+    background: #2b201b;
+    color: #ffc49d;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+#return-live:hover {
+    background: #432c21;
+}
+
+#return-live:focus-visible {
+    outline: 2px solid var(--orange);
+    outline-offset: 2px;
+}
+
+#reference-feedback {
+    align-self: center;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.track-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(285px, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.graph-panel,
+.lap-panel {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+}
+
+.graph-panel {
+    overflow: hidden;
+}
+
+.graph-panel .gtitle {
+    fill: var(--text) !important;
+    font-weight: 650;
+}
+
+.pit-wall > .graph-panel {
+    margin-bottom: 12px;
+}
+
+.lap-panel {
+    padding: 14px;
+}
+
+.lap-panel h3 {
+    margin: 0 0 12px;
+    font-size: 17px;
+}
+
+.stint-summary {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.stint-summary span,
+.lap-table-note,
+.lap-table td:first-child,
+.lap-table td:nth-child(3) {
+    color: var(--muted);
+}
+
+.lap-table-note {
+    margin: 5px 0 12px;
+    font-size: 11px;
+}
+
+.lap-table-scroll {
+    max-height: 420px;
+    overflow: auto;
+}
+
+.lap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font: 12px/1.4 var(--mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.lap-table th,
+.lap-table td {
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+}
+
+.lap-table th:last-child,
+.lap-table td:last-child {
+    text-align: right;
+}
+
+.lap-table th {
+    background: #1a2230;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.lap-table .lap-best { background: #163028; }
+.lap-table .lap-live { background: #262b39; }
+
+@media (max-width: 900px) {
+    .lap-metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+    .track-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 440px) {
+    .sensor-metrics,
+    .lap-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pit-controls > label { flex-basis: 100%; }
+}

@@ -3,6 +3,7 @@ import threading
 import time
 import json
 from collections import deque
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import plotly.graph_objects as go
@@ -221,16 +222,17 @@ mqtt_client.message_callback_add(STATE_TOPIC, on_lap_state)
 mqtt_client.message_callback_add(UPDATE_TOPIC, on_lap_state)
 
 
-app = Dash(__name__)
+app = Dash(__name__, title="UM Racing · Pit Wall")
+logo_asset = "team-logo.png"
+team_logo = (html.Img(src=app.get_asset_url(logo_asset), alt="UM Racing logo")
+             if (Path(app.config.assets_folder) / logo_asset).is_file()
+             else html.Span("UMR", **{"aria-hidden": "true"}))
 
-box_style = {
-    "color": "#172033",
-    "width": "200px",
-    "padding": "20px",
-    "margin": "10px",
-    "backgroundColor": "#eeeeee",
-    "borderRadius": "10px",
-    "textAlign": "center",
+box_style = {"color": "var(--text)"}
+plot_style = {
+    "paper_bgcolor": "#121720",
+    "plot_bgcolor": "#0e131c",
+    "font": {"family": "Bahnschrift, Segoe UI, system-ui, sans-serif", "color": "#b6c3d6"},
 }
 
 # ADDED: (component id prefix, wire field name, title shown on the box)
@@ -241,95 +243,70 @@ METRIC_BOXES = [
     ("speed", "speed_kmh", "Vehicle Speed"),
 ]
 
-# ADDED: look of a box that currently has an out-of-range warning.
-# boxShadow (not border) so the box does not change size or jump.
 alert_box_style = {
     **box_style,
-    "backgroundColor": "#f8d7da",
-    "boxShadow": "0 0 0 3px #dc3545",
-}
-
-warning_text_style = {
-    "fontSize": "13px",
-    "fontWeight": "bold",
-    "color": "#842029",
-    "minHeight": "36px",
-    "margin": "6px 0 0 0",
-}
-
-validation_base_style = {
-    "padding": "14px",
-    "margin": "10px 10px 20px 10px",
-    "borderRadius": "10px",
-    "textAlign": "center",
-    "fontWeight": "bold",
-    "maxWidth": "760px",
+    "backgroundColor": "#2c171f",
+    "borderColor": "#ac4357",
 }
 
 
 def make_metric_box(key, title):
     return html.Div(
         [
-            html.H3(title, id=f"{key}-title"),
-            html.H2(id=f"{key}-value"),
-            html.P(id=f"{key}-warning", style=warning_text_style),
+            html.H3(title, id=f"{key}-title", className="metric-label"),
+            html.H2(id=f"{key}-value", className="metric-value"),
+            html.P(id=f"{key}-warning", className="metric-detail"),
         ],
         id=f"{key}-box",
+        className=f"metric-card metric-card--{key}",
         style=box_style,
     )
 
 
 app.layout = html.Div(
     [
-        html.P("UM RACING  /  CAR 01", style={"letterSpacing": "3px", "color": "#94a3b8"}),
-        html.H1("Pit Wall · Live telemetry"),
+        html.Header([
+            html.Div(team_logo, className="team-mark"),
+            html.Div([
+                html.P("UM Racing / Car 01", className="team-name"),
+                html.H1(["Pit Wall", html.Span("Live telemetry")]),
+            ]),
+        ], className="pit-header"),
         html.Div([
-            html.Div([html.Small("LAP TIME · LIVE"),
-                      html.Div("—", id="lap-live-clock", **{"data-lap-clock": "true"},
-                               style={"fontSize": "36px", "fontWeight": "bold", "fontVariantNumeric": "tabular-nums"})],
-                     style={"padding": "20px", "background": "#172033", "borderRadius": "12px", "flex": "1 1 180px"}),
-            html.Div(id="lap-metrics", style={"display": "contents"}),
-        ], style={"display": "flex", "flexWrap": "wrap", "gap": "12px"}),
+            html.Div(id="validation-status", className="validation-status"),
+            html.P(id="sequence-value", className="packet-status"),
+        ], className="status-strip"),
+        html.Div([make_metric_box(key, title) for key, _, title in METRIC_BOXES],
+                 className="sensor-metrics"),
+        html.Div([
+            html.Div([html.Small("LAP TIME · LIVE", className="metric-label"),
+                      html.Div("—", id="lap-live-clock", className="metric-value", **{"data-lap-clock": "true"})],
+                     className="metric-card metric-card--clock"),
+            html.Div(id="lap-metrics", className="lap-metrics"),
+        ], className="lap-metrics-grid"),
         dcc.Store(id="lap-clock-state"),
         dcc.Store(id="lap-clock-ack"),
-        html.P(id="lap-status", style={"color": "#94a3b8"}),
+        html.P(id="lap-status", className="lap-status"),
         html.Div([
             html.Label(["Reference lap", dcc.Dropdown(id="reference-choice", value="best", clearable=False,
-                        options=[{"label": "Session best (automatic)", "value": "best"}], style={"color": "#172033", "width": "260px"})]),
+                        options=[{"label": "Session best (automatic)", "value": "best"}], className="pit-select")]),
             html.Label(["Track colour", dcc.Dropdown(id="track-colour", value="inputs", clearable=False,
                         options=[{"label": label, "value": value} for label, value in
                                  (("Pedal activity", "inputs"), ("Speed", "speed_kmh"), ("Throttle", "throttle_percent"), ("Brake pressure", "brake_bar"))],
-                        style={"color": "#172033", "width": "220px"})]),
+                        className="pit-select")]),
             html.Button("Return to live", id="return-live", n_clicks=0),
             html.Span(id="reference-feedback"),
-        ], style={"display": "flex", "gap": "16px", "alignItems": "end", "flexWrap": "wrap"}),
+        ], className="pit-controls"),
         dcc.Store(id="inspection"), dcc.Store(id="input-view-state"),
         dcc.Store(id="sensor-view-state"), dcc.Store(id="lap-view-state"),
         html.Div([
-            dcc.Graph(id="track-trace", style={"flex": "2 1 480px"}),
+            dcc.Graph(id="track-trace", className="graph-panel"),
             html.Div([html.H3("Session laps"), html.Div(id="lap-history")],
-                     style={"flex": "1 1 240px", "padding": "20px", "background": "#172033", "borderRadius": "12px"}),
-        ], style={"display": "flex", "flexWrap": "wrap", "gap": "16px"}),
-        dcc.Graph(id="lap-delta-graph"),
-        dcc.Graph(id="lap-input-graphs"),
-
-        # CHANGED: the four boxes are now built by make_metric_box(), which
-        # adds a title id, a box id and a reserved warning line to each.
-        # The value ids (throttle-value, ...) are exactly as before.
-        html.Div(
-            [make_metric_box(key, title) for key, _, title in METRIC_BOXES],
-            style={
-                "display": "flex",
-                "flexWrap": "wrap",
-            },
-        ),
-
-        # ADDED: one-line summary of the validation status
-        html.Div(id="validation-status"),
-
-        html.P(id="sequence-value"),
-
-        dcc.Graph(id="telemetry-graphs"),
+                     className="lap-panel"),
+        ], className="track-grid"),
+        dcc.Graph(id="lap-delta-graph", className="graph-panel"),
+        dcc.Graph(id="telemetry-graphs", className="graph-panel"),
+        dcc.Graph(id="lap-input-graphs", className="graph-panel"),
 
         dcc.Interval(
             id="dashboard-update",
@@ -340,13 +317,7 @@ app.layout = html.Div(
         dcc.Interval(id="clock-update", interval=100, n_intervals=0),
         dcc.Interval(id="sensor-update", interval=100, n_intervals=0),
     ],
-    style={
-        "fontFamily": "Arial",
-        "padding": "30px",
-        "backgroundColor": "#0b1120",
-        "color": "#e2e8f0",
-        "minHeight": "100vh",
-    },
+    className="pit-wall",
 )
 
 
@@ -412,7 +383,7 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
             point = min(candidates, key=lambda item: item[0])[1]
             figure.add_trace(go.Scatter(x=[point[0]], y=[point[1]], mode="markers", name="Inspection",
                                        marker={"size": 16, "color": "#f8fafc", "symbol": "circle-open", "line": {"width": 3}}, hoverinfo="skip"))
-    figure.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+    figure.update_layout(**plot_style, template="plotly_dark",
                          title="Red Bull Ring · Austria" if outline else "GPS track trace", height=420, uirevision=f"track:{live_revision}",
                          xaxis_title="East (m)", yaxis_title="North (m)",
                          yaxis={"scaleanchor": "x", "scaleratio": 1}, margin={"t": 55, "b": 45, "l": 55, "r": 20})
@@ -424,9 +395,10 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
     delta.add_hline(y=0, line_color="#64748b")
     if is_number(inspection):
         delta.add_vline(x=inspection, line_color="#f8fafc", line_dash="dot")
-    delta.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+    delta.update_layout(**plot_style, template="plotly_dark",
                         title="Live delta vs reference lap · negative is faster", height=230,
-                        uirevision=f"delta:{live_revision}", xaxis_title="Distance along reference lap (m)", yaxis_title="Delta (s)")
+                        uirevision=f"delta:{live_revision}", xaxis_title="Distance along reference lap (m)", yaxis_title="Delta (s)",
+                        margin={"t": 55, "b": 45, "l": 65, "r": 20})
     return figure, delta
 
 
@@ -446,10 +418,10 @@ def update_lap_dashboard(_, colour="inputs", inspection=None, live_revision=0, s
                ("BEST LAP", lap_time(state["best"])),
                ("LIVE DELTA", "—" if delta is None else f"{delta:+.3f} s"),
                ("SESSION TOP SPEED", speed_text(state["session_top_speed"]) + " km/h")]
-    cards = [html.Div([html.Small(label, style={"color": "#94a3b8", "letterSpacing": "1px"}),
-                      html.Div(value, style={"fontSize": "30px", "fontWeight": "bold",
-                                            "color": ("#34d399" if delta <= 0 else "#fb7185") if label == "LIVE DELTA" and delta is not None else "#f8fafc"})],
-                     style={"flex": "1 1 160px", "padding": "20px", "background": "#172033", "borderRadius": "12px"})
+    cards = [html.Div([html.Small(label, className="metric-label"),
+                      html.Div(value, className="metric-value",
+                               style={"color": ("#34d399" if delta <= 0 else "#fb7185") if label == "LIVE DELTA" and delta is not None else "var(--text)"})],
+                     className="metric-card")
              for label, value in metrics]
     if not state["fresh"]:
         status = "GPS unavailable or stale · showing last known lap time"
@@ -496,16 +468,15 @@ def speed_text(value):
 
 
 def lap_table(state):
-    cell = {"padding": "7px 8px", "borderBottom": "1px solid #293140"}
     def row(number, seconds, speed, difference, best=False, live=False):
         label = "BEST" if best else "—" if difference is None else f"{difference:+.3f}"
         color = "#4ade80" if best or (difference is not None and difference <= .1) else "#fbbf24" if difference is not None and difference < 1 else "#fb7185"
         return html.Tr([
-            html.Td(number, style={**cell, "color": "#94a3b8"}),
-            html.Td(lap_time(seconds), style=cell, **({"data-lap-clock": "true"} if live else {})),
-            html.Td(speed_text(speed), style={**cell, "color": "#94a3b8"}),
-            html.Td(label, style={**cell, "color": color, "textAlign": "right"}),
-        ], style={"background": "#20352d" if best else "#253044" if live else "transparent"})
+            html.Td(number),
+            html.Td(lap_time(seconds), **({"data-lap-clock": "true"} if live else {})),
+            html.Td(speed_text(speed)),
+            html.Td(label, style={"color": color}),
+        ], className="lap-best" if best else "lap-live" if live else "")
     rows = [row("SESSION BEST", state["best"], state["best_top_speed"], None, best=state["best"] is not None)]
     for lap in state["history"]:
         # Recompute against the CURRENT session best, so every row uses
@@ -515,13 +486,12 @@ def lap_table(state):
     if state["lap_number"] is not None:
         rows.append(row(f"{state['lap_number']} LIVE", state["elapsed"], state["lap_top_speed"], state["delta"], live=True))
     return html.Div([
-        html.Div([html.Strong("Whole stint"), html.Span(f"{state['completed_count']} laps", style={"float": "right", "color": "#94a3b8"})]),
-        html.P("GPS top speed · completed-lap delta vs session best", style={"fontSize": "11px", "color": "#94a3b8"}),
+        html.Div([html.Strong("Whole stint"), html.Span(f"{state['completed_count']} laps")], className="stint-summary"),
+        html.P("GPS top speed · completed-lap delta vs session best", className="lap-table-note"),
         html.Div(html.Table([
-            html.Thead(html.Tr([html.Th(label, style={**cell, "color": "#94a3b8", "fontSize": "11px"}) for label in ("#", "TIME", "TOP KPH", "DELTA")])),
+            html.Thead(html.Tr([html.Th(label) for label in ("#", "TIME", "TOP KPH", "DELTA")])),
             html.Tbody(rows),
-        ], style={"width": "100%", "borderCollapse": "collapse", "fontFamily": "monospace", "fontVariantNumeric": "tabular-nums"}),
-                 style={"maxHeight": "420px", "overflowY": "auto"}),
+        ], className="lap-table"), className="lap-table-scroll"),
     ])
 
 
@@ -633,9 +603,8 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     )
 
     figure.update_layout(
+        **plot_style,
         template="plotly_dark",
-        paper_bgcolor="#0b1120",
-        plot_bgcolor="#172033",
         height=1000,
         showlegend=False,
         title="Live Telemetry History",
@@ -649,9 +618,8 @@ def make_throttle_bench_figure(times, values, *, millivolts):
     return go.Figure(
         data=[go.Scatter(x=times, y=values, mode="lines", line={"color": "#22c55e"})],
         layout={
+            **plot_style,
             "template": "plotly_dark",
-            "paper_bgcolor": "#0b1120",
-            "plot_bgcolor": "#172033",
             "title": "Throttle Bench History",
             "xaxis_title": "Time (seconds)",
             "yaxis_title": "Throttle (mV)" if millivolts else "Throttle (%)",
@@ -674,7 +642,7 @@ def make_live_pedal_figure(throttle, brake):
         ), row=row, col=1)
         figure.update_yaxes(title_text=f"{name} (%)", range=[0, 100], dtick=25, row=row, col=1)
     figure.update_xaxes(title_text="Elapsed time (s)", row=2, col=1)
-    figure.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
+    figure.update_layout(**plot_style, template="plotly_dark",
                          title="Live Pedal Inputs", height=500, showlegend=False,
                          margin={"l": 65, "r": 28, "t": 55, "b": 55})
     return figure
@@ -739,7 +707,7 @@ def update_hardware_cards(include_figure):
     link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
     label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS and pedal inputs"
     return (value, brake_value, "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
-                **validation_base_style, "backgroundColor": "#e2e8f0", "color": "#172033",
+                "backgroundColor": "#152539", "color": "#bfdbfe",
             })
 
 
@@ -814,9 +782,8 @@ def update_dashboard(_, include_figure=True):
     healthy = validation_text.startswith("\u2713")
     pending = validation_text.startswith("Waiting for validation")
     validation_style = {
-        **validation_base_style,
-        "backgroundColor": "#d1e7dd" if healthy else "#fef3c7" if pending else "#f8d7da",
-        "color": "#0f5132" if healthy else "#92400e" if pending else "#842029",
+        "backgroundColor": "#142a23" if healthy else "#302717" if pending else "#321b24",
+        "color": "#a7f3d0" if healthy else "#fde68a" if pending else "#fecdd3",
     }
 
     return (
@@ -921,7 +888,7 @@ def update_lap_views(n, colour, inspection, live_revision, previous, previous_in
     delta, delta_meta = stream_figure(delta, (previous or {}).get("delta"), identity)
     inputs, inputs_meta = no_update, no_update
     if hardware_source is None:
-        inputs, inputs_meta = stream_figure(lap_input_figure(state, inspection, live_revision), previous_inputs,
+        inputs, inputs_meta = stream_figure(lap_input_figure(state, inspection, live_revision).update_layout(**plot_style), previous_inputs,
                                            [state["lap_key"], state["revision"], live_revision])
     options = [{"label": "Session best (automatic)", "value": "best"}] + [
         {"label": f"Lap {number}", "value": number} for number in state.get("reference_choices", [])]

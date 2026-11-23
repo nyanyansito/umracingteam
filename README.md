@@ -202,6 +202,10 @@ than 20 metres away. Missing comparisons create gaps in the delta graph.
 
 ## Dashboard controls
 
+To display your team logo, save a PNG as `assets/team-logo.png` and restart the
+dashboard. A transparent background works well with the dark header. The header
+shows a UMR wordmark by default.
+
 The dashboard provides:
 
 - Current, last and best lap times, live delta, GPS top speeds and a lap table.
