@@ -21,7 +21,7 @@ PROGRAMS = (
 BOOTSTRAP = (
     "import runpy,signal,sys; "
     "signal.signal(getattr(signal,'SIGBREAK',signal.SIGINT),signal.default_int_handler); "
-    "runpy.run_path(sys.argv[1],run_name='__main__')"
+    "runpy.run_path(sys.argv.pop(1),run_name='__main__')"
 )
 
 
