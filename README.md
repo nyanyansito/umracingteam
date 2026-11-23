@@ -94,6 +94,8 @@ The raw stream still reports `BRAKE_V` in volts. `BRAKE_I2C_ERROR` means the STM
 could not complete an ADS1115 transfer.
 
 The throttle card shows raw mV when the STM32 sends `UMR_THROTTLE` frames.
+Combined hardware mode accepts measured endpoints above 250 mV. Calibrations
+within the original 5–250 mV window retain the divider's open-circuit check.
 To enable throttle percentage and its trace, note the mV reading with the pedal
 fully released and then fully pressed. Stop the dashboard with **Ctrl+C** and
 save those two readings from PowerShell:

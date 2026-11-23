@@ -10,7 +10,7 @@ from hardware_bench import SerialBench, ThrottleCalibration
 class ThrottleBenchTest(unittest.TestCase):
     def test_dashboard_saves_and_reuses_calibration_for_the_same_port_and_mode(self):
         port = "socket://192.168.4.1:9000"
-        saved = ThrottleCalibration(92, 60)
+        saved = ThrottleCalibration(91.5, 413)
         with (TemporaryDirectory() as directory,
               patch.object(dashboard, "THROTTLE_CALIBRATION_DIR", Path(directory)),
               patch.object(SerialBench, "read"),
@@ -18,7 +18,7 @@ class ThrottleBenchTest(unittest.TestCase):
             launches = []
             app.run.side_effect = lambda **_: launches.append(dashboard.hardware_source.calibration)
 
-            dashboard.main(["--hardware-port", port, "--throttle-calibration-mv", "92", "60",
+            dashboard.main(["--hardware-port", port, "--throttle-calibration-mv", "91.5", "413",
                             "--save-throttle-calibration"])
             dashboard.main(["--hardware-port", port])
             dashboard.main(["--hardware-port", port, "--throttle-calibration-mv", "80", "70"])
@@ -27,6 +27,26 @@ class ThrottleBenchTest(unittest.TestCase):
             dashboard.main(["--hardware-port", "COM5"])
 
         self.assertEqual(launches, [saved, saved, ThrottleCalibration(80, 70), saved, None, None])
+
+    def test_live_throttle_reads_above_the_bench_range(self):
+        source = SerialBench("socket://192.168.4.1:9000")
+        source.receive(b"UMR_THROTTLE,3304\n")
+        with patch.object(dashboard, "hardware_source", source):
+            card = dashboard.update_hardware_cards(False)
+        self.assertIn("413.0 mV · Calibration required", card)
+
+        source = SerialBench(source.port, ThrottleCalibration(91.5, 413))
+        cases = [(732, "0.0 %"), (2018, "50.0 %"), (3304, "100.0 %"), (0, "—"), (32767, "—")]
+        with patch.object(dashboard, "hardware_source", source):
+            for counts, expected in cases:
+                source.receive(f"UMR_THROTTLE,{counts}\n".encode())
+                self.assertEqual(dashboard.update_hardware_cards(False)[0], expected)
+        released, middle, pressed, shorted, saturated = [value for _, value in source.pedal_history()[0]]
+        self.assertAlmostEqual(middle, 50)
+        self.assertEqual((released, pressed, shorted, saturated), (0, 100, None, None))
+
+        with self.assertRaisesRegex(ValueError, "between 5 and 250 mV"):
+            ThrottleCalibration(91.5, 413, bench_only=True)
 
     def test_raw_throttle_frames_feed_the_card_and_history(self):
         source = SerialBench("COM5", throttle_only=True)

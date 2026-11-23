@@ -661,7 +661,8 @@ def update_hardware_cards(include_figure):
             millivolts = counts * VOLTS_PER_COUNT * 1000
             percent = None if source.calibration is None else source.calibration.percent(millivolts)
             if percent is None:
-                reason = ("Calibration required" if ThrottleCalibration.in_fixture_range(millivolts)
+                reason = ("Calibration required" if source.calibration is None
+                          and ThrottleCalibration.in_adc_range(millivolts)
                           else "Throttle signal out of range")
                 detail = f"{millivolts:.1f} mV · {reason}"
             else:
@@ -936,7 +937,7 @@ def main(argv=None):
         try:
             brake_calibration = BrakeCalibration(*args.brake_calibration_v) if args.brake_calibration_v else None
             if args.throttle_calibration_mv is not None:
-                calibration = ThrottleCalibration(*args.throttle_calibration_mv)
+                calibration = ThrottleCalibration(*args.throttle_calibration_mv, bench_only=args.throttle_bench)
                 if args.save_throttle_calibration:
                     calibration.save(calibration_path)
                     print(f"Saved throttle calibration to {calibration_path}")
@@ -944,7 +945,7 @@ def main(argv=None):
             parser.error(str(error))
         if calibration is None:
             try:
-                calibration = ThrottleCalibration.load(calibration_path)
+                calibration = ThrottleCalibration.load(calibration_path, bench_only=args.throttle_bench)
             except (OSError, ValueError) as error:
                 print(f"Could not read saved throttle calibration at {calibration_path}: {error}")
             if calibration is not None:

@@ -1,7 +1,7 @@
 """Read UMR bench frames over STM32 USB or the ESP32 TCP bridge."""
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from datetime import UTC, datetime
 from math import isfinite
 import re
@@ -18,6 +18,7 @@ from telemetry_validation import decode_object, is_number
 
 BAUD = 115200
 VOLTS_PER_COUNT = 4.096 / 32768  # ADS1115 gain setting in the bench sketch.
+THROTTLE_ADC_RAIL_MV = 32767 * VOLTS_PER_COUNT * 1000
 SENSOR_TIMEOUT = 2.0
 GPS_TIMEOUT = 3.0
 THROTTLE_FRAME = re.compile(rb"UMR_THROTTLE,(-?[0-9]{1,5})?")
@@ -89,30 +90,43 @@ class BrakeCalibration:
 class ThrottleCalibration:
     released_mv: float
     pressed_mv: float
+    bench_only: InitVar[bool] = False
 
-    def __post_init__(self):
-        if not (self.in_fixture_range(self.released_mv)
-                and self.in_fixture_range(self.pressed_mv)
-                and self.released_mv != self.pressed_mv):
-            raise ValueError("Use two distinct throttle readings between 5 and 250 mV.")
+    def __post_init__(self, bench_only):
+        if self.released_mv == self.pressed_mv:
+            raise ValueError("Use two distinct throttle readings for released and fully pressed.")
+        if bench_only and not self.uses_fixture_range:
+            raise ValueError("Throttle bench calibration requires both readings between 5 and 250 mV.")
+        if not (self.in_adc_range(self.released_mv) and self.in_adc_range(self.pressed_mv)):
+            raise ValueError(f"Throttle readings must be above 5 mV and below {THROTTLE_ADC_RAIL_MV:g} mV.")
 
     @staticmethod
     def in_fixture_range(millivolts):
         # The specified divider reads about 300 mV open and 0 mV shorted.
         return is_number(millivolts) and 5 < millivolts < 250
 
+    @staticmethod
+    def in_adc_range(millivolts):
+        return is_number(millivolts) and 5 < millivolts < THROTTLE_ADC_RAIL_MV
+
+    @property
+    def uses_fixture_range(self):
+        return self.in_fixture_range(self.released_mv) and self.in_fixture_range(self.pressed_mv)
+
     def percent(self, millivolts):
-        if not self.in_fixture_range(millivolts):
+        # Preserve the open-circuit check for calibrations in the original divider's range.
+        valid = self.in_fixture_range if self.uses_fixture_range else self.in_adc_range
+        if not valid(millivolts):
             return None
         return percent_of_span(millivolts, self.released_mv, self.pressed_mv)
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, *, bench_only=False):
         try:
             saved = decode_object(path.read_bytes())
         except FileNotFoundError:
             return None
-        return cls(saved.get("released_mv"), saved.get("pressed_mv"))
+        return cls(saved.get("released_mv"), saved.get("pressed_mv"), bench_only=bench_only)
 
     def save(self, path):
         write_json(path, {"released_mv": self.released_mv, "pressed_mv": self.pressed_mv})
