@@ -153,7 +153,6 @@ body {
 
 .metric-card--throttle { --accent: #22c55e; }
 .metric-card--brake { --accent: #ef4444; }
-.metric-card--steering { --accent: #fbbf24; }
 .metric-card--speed { --accent: #38bdf8; }
 .metric-card--clock { --accent: var(--orange); }
 

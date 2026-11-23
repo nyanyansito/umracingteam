@@ -167,9 +167,12 @@ class FastIntegrityTests(unittest.TestCase):
         self.assertGreater(times[1], times[0])
 
     def test_speed_limits_and_outliers_remain_visible(self):
-        figure = dashboard.make_sensor_figure([0, 1], [0, 300], [0, 0], [0, 0], [115, 130])
-        self.assertGreaterEqual(figure.layout.yaxis4.range[1], 130)
+        figure = dashboard.make_sensor_figure([0, 1], [0, 300], [0, 0], [115, 130])
+        self.assertGreaterEqual(figure.layout.yaxis3.range[1], 130)
         self.assertGreaterEqual(figure.layout.yaxis.range[1], 300)
+        self.assertEqual([trace.name for trace in figure.data], ["Throttle", "Brake", "Speed"])
+        self.assertEqual(figure.data[0].line.color, "#22c55e")
+        self.assertNotIn("yaxis4", figure.layout.to_plotly_json())
 
     def test_graph_appends_only_new_points_and_resets_on_new_session(self):
         self.healthy()
@@ -177,6 +180,8 @@ class FastIntegrityTests(unittest.TestCase):
         dashboard.on_message(None, None, message({**SAMPLE, "sequence": 26, "timestamp_ms": 5010}))
         _, extension, state = dashboard.update_sensor_graph(1, 0, state)
         self.assertEqual(extension[0]["x"][0], [5.01])
+        self.assertEqual(extension[1], [0, 1, 2])
+        self.assertEqual(extension[0]["y"][2], [SAMPLE["speed_kmh"]])
         dashboard.on_message(None, None, message({**SAMPLE, "sequence": 0, "timestamp_ms": 0, "session_id": "new"}))
         figure, _, state = dashboard.update_sensor_graph(2, 0, state)
         self.assertEqual(list(figure.data[0].x), [0])
@@ -264,7 +269,9 @@ class SharedLapServiceTests(unittest.TestCase):
         self.assertEqual(list(figure.data[1].x), state["current_distances"])
         self.assertEqual(list(figure.data[0].x), [p[3] for p in state["reference"]])
         self.assertTrue(all(isinstance(c["steering_degrees"], (int, float)) for c in state["current_channels"]))
-        self.assertEqual(len(figure.layout.shapes), 4)
+        self.assertEqual(len(figure.layout.shapes), 3)
+        self.assertEqual(figure.data[1].line.color, "#22c55e")
+        self.assertFalse(any("Steering" in trace.name for trace in figure.data))
 
 
 class PersistenceAndAlignmentTests(unittest.TestCase):

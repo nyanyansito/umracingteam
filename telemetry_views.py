@@ -2,16 +2,21 @@
 from dash import Patch
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from telemetry_validation import FAST_FIELDS, is_number
+from telemetry_validation import is_number
 
-CHANNELS = (("Throttle (%)", "#22c55e"), ("Brake (bar)", "#ef4444"),
-            ("Steering (°)", "#fbbf24"), ("Speed (km/h)", "#38bdf8"))
+THROTTLE_GREEN = "#22c55e"
+CHANNELS = {
+    "throttle_percent": ("Throttle (%)", THROTTLE_GREEN),
+    "brake_bar": ("Brake (bar)", "#ef4444"),
+    "speed_kmh": ("Speed (km/h)", "#38bdf8"),
+}
+DASHBOARD_FIELDS = tuple(CHANNELS)
 
 
 def lap_input_figure(state, inspection=None, live_revision=0):
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=.04)
+    fig = make_subplots(rows=len(DASHBOARD_FIELDS), cols=1, shared_xaxes=True, vertical_spacing=.04)
     distances = state.get("current_distances", [])
-    for row, (field, (label, colour)) in enumerate(zip(FAST_FIELDS, CHANNELS), 1):
+    for row, (field, (label, colour)) in enumerate(CHANNELS.items(), 1):
         reference = state.get("reference_channels", [])
         current = state.get("current_channels", [])
         fig.add_trace(go.Scatter(x=[p[3] for p in state["reference"]],
@@ -22,7 +27,7 @@ def lap_input_figure(state, inspection=None, live_revision=0):
         fig.update_yaxes(title_text=label, row=row, col=1)
         if is_number(inspection):
             fig.add_vline(x=inspection, line_color="#f8fafc", line_dash="dot", row=row, col=1)
-    fig.update_xaxes(title_text="Distance along reference lap (m)" if state["reference"] else "Distance travelled this lap (m)", row=4, col=1)
+    fig.update_xaxes(title_text="Distance along reference lap (m)" if state["reference"] else "Distance travelled this lap (m)", row=len(DASHBOARD_FIELDS), col=1)
     fig.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#172033",
                       title="Live lap inputs · aligned to GPS fixes", height=620,
                       hovermode="x unified", uirevision=f"lap-inputs:{live_revision}", showlegend=False,

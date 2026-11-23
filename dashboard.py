@@ -19,7 +19,7 @@ from telemetry_validation import FAST_FIELDS, decode_object, is_number, validate
 from telemetry_config import BROKER, PORT, DASHBOARD_HOST, DASHBOARD_PORT
 from sample_order import SampleOrder, sample_key
 from data_processing import CHANNEL_SPECS
-from telemetry_views import lap_input_figure, stream_figure
+from telemetry_views import DASHBOARD_FIELDS, THROTTLE_GREEN, lap_input_figure, stream_figure
 from lap_stream import RemoteLapAnalysis, STATE_TOPIC, UPDATE_TOPIC, REQUEST_TOPIC, REFERENCE_TOPIC
 
 
@@ -239,7 +239,6 @@ plot_style = {
 METRIC_BOXES = [
     ("throttle", "throttle_percent", "Throttle"),
     ("brake", "brake_bar", "Brake Pressure"),
-    ("steering", "steering_degrees", "Steering Angle"),
     ("speed", "speed_kmh", "Vehicle Speed"),
 ]
 
@@ -343,7 +342,7 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
                                    hovertemplate="Reference · %{customdata:.0f} m<extra></extra>"))
     distances = state.get("current_distances", [])
     modes = state.get("current_inputs", [])
-    colors = {"throttle": ("Throttle", "#22c55e"), "brake": ("Braking", "#ef4444"),
+    colors = {"throttle": ("Throttle", THROTTLE_GREEN), "brake": ("Braking", "#ef4444"),
               "coast": ("Coasting", "#a3a3a3"), "unknown": ("No input data", "#475569")}
     if colour == "inputs":
         for mode, (name, color) in colors.items():
@@ -363,12 +362,13 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
         figure.add_trace(go.Scatter(x=[p[0] for p in current], y=[p[1] for p in current],
                                    mode="lines", name="Current lap", line={"color": "#475569", "width": 5}, hoverinfo="skip"))
         channels = state.get("current_channels", [])
+        channel_scale = [[0, "#16422B"], [1, THROTTLE_GREEN]] if colour == "throttle_percent" else "Turbo"
         indices = [i for i, sample in enumerate(channels) if i < len(current) and is_number(sample.get(colour))]
         figure.add_trace(go.Scatter(x=[current[i][0] for i in indices], y=[current[i][1] for i in indices],
                                    customdata=[distances[i] if i < len(distances) else None for i in indices],
                                    mode="markers", name=colour.replace("_", " "),
                                    marker={"size": 7, "color": [channels[i][colour] for i in indices],
-                                           "colorscale": "Turbo", "showscale": True,
+                                           "colorscale": channel_scale, "showscale": True,
                                            "colorbar": {"title": "km/h" if colour == "speed_kmh" else "%" if colour == "throttle_percent" else "bar"}},
                                    hovertemplate="%{marker.color:.1f} · %{customdata:.0f} m<extra></extra>"))
     if current:
@@ -506,16 +506,15 @@ def channel_range(field, values, *, throttle_millivolts=False):
     return [low, high if high > low else low + 1]
 
 
-def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed):
+def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_speed):
     figure = make_subplots(
-        rows=4,
+        rows=3,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.07,
         subplot_titles=(
             "Throttle Position",
             "Brake Pressure",
-            "Steering Angle",
             "Vehicle Speed",
         ),
     )
@@ -526,7 +525,7 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
             y=graph_throttle,
             mode="lines",
             name="Throttle",
-            line={"color": "#22c55e"},
+            line={"color": THROTTLE_GREEN},
         ),
         row=1,
         col=1,
@@ -547,24 +546,12 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     figure.add_trace(
         go.Scatter(
             x=graph_times,
-            y=graph_steering,
-            mode="lines",
-            name="Steering",
-            line={"color": "#fbbf24"},
-        ),
-        row=3,
-        col=1,
-    )
-
-    figure.add_trace(
-        go.Scatter(
-            x=graph_times,
             y=graph_speed,
             mode="lines",
             name="Speed",
             line={"color": "#38bdf8"},
         ),
-        row=4,
+        row=3,
         col=1,
     )
 
@@ -583,22 +570,15 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
     )
 
     figure.update_yaxes(
-        title_text="Steering (°)",
-        range=channel_range("steering_degrees", graph_steering),
-        row=3,
-        col=1,
-    )
-
-    figure.update_yaxes(
         title_text="Speed (km/h)",
         range=channel_range("speed_kmh", graph_speed),
-        row=4,
+        row=3,
         col=1,
     )
 
     figure.update_xaxes(
         title_text="Time (seconds)",
-        row=4,
+        row=3,
         col=1,
     )
 
@@ -616,7 +596,7 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering,
 
 def make_throttle_bench_figure(times, values, *, millivolts):
     return go.Figure(
-        data=[go.Scatter(x=times, y=values, mode="lines", line={"color": "#22c55e"})],
+        data=[go.Scatter(x=times, y=values, mode="lines", line={"color": THROTTLE_GREEN})],
         layout={
             **plot_style,
             "template": "plotly_dark",
@@ -631,7 +611,7 @@ def make_throttle_bench_figure(times, values, *, millivolts):
 def make_live_pedal_figure(throttle, brake):
     figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
     for row, name, color, samples in (
-        (1, "Throttle", "#22c55e", throttle),
+        (1, "Throttle", THROTTLE_GREEN, throttle),
         (2, "Brake", "#f87171", brake),
     ):
         times, values = zip(*samples) if samples else ([], [])
@@ -706,7 +686,7 @@ def update_hardware_cards(include_figure):
             outputs += [title, {"display": "none"}, ""]
     link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
     label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS and pedal inputs"
-    return (value, brake_value, "—", "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
+    return (value, brake_value, "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
                 "backgroundColor": "#152539", "color": "#bfdbfe",
             })
 
@@ -720,11 +700,11 @@ def update_dashboard(_, include_figure=True):
         graph_times = list(time_history)
         graph_throttle = list(throttle_history)
         graph_brake = list(brake_history)
-        graph_steering = list(steering_history)
         graph_speed = list(speed_history)
 
         # ADDED: snapshot of warnings that are still active
-        active_alerts = alert_tracker.active()
+        active_alerts = {field: alert for field, alert in alert_tracker.active().items()
+                         if field in DASHBOARD_FIELDS}
         now = time.monotonic()
         age = None if last_raw_time is None else max(0, now - last_raw_time,
                      0 if source_offset is None else now - sample_order.unwrapped_ms / 1000 - source_offset)
@@ -736,13 +716,14 @@ def update_dashboard(_, include_figure=True):
         matching_validation = processed_key == sample_key(latest)
         processed_fresh = (alert_tracker.last_processed_time is not None
                            and now - alert_tracker.last_processed_time <= FRESHNESS_SECONDS)
-        current_errors = {field for field, flag in alert_tracker.latest_flags.items() if flag != "ok"}
+        current_errors = {field for field in DASHBOARD_FIELDS
+                          if alert_tracker.latest_flags.get(field, "ok") != "ok"}
         connected = mqtt_connected
         invalid_sample = raw_invalid
         status = gateway_status.copy() if gateway_status else None
         gateway_fresh = last_gateway_time is not None and now - last_gateway_time <= GATEWAY_FRESHNESS_SECONDS
 
-    figure = make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_steering, graph_speed) if include_figure else None
+    figure = make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_speed) if include_figure else None
 
     # ADDED: build the per-box warning outputs (title, style, text).
     alert_outputs = []
@@ -789,7 +770,6 @@ def update_dashboard(_, include_figure=True):
     return (
         f"{latest['throttle_percent']:.2f} %",
         f"{latest['brake_bar']:.2f} bar",
-        f"{latest['steering_degrees']:.2f}°",
         f"{latest['speed_kmh']:.2f} km/h",
         f"Latest packet: {latest['sequence']} · received {rate:.0f} Hz · sample age {age_text} · missing {missed} · ignored {rejected}",
         figure,
@@ -802,7 +782,6 @@ def update_dashboard(_, include_figure=True):
 @app.callback(
     Output("throttle-value", "children"),
     Output("brake-value", "children"),
-    Output("steering-value", "children"),
     Output("speed-value", "children"),
     Output("sequence-value", "children"),
     # ADDED: per-box warning triangle, red highlight and warning text
@@ -812,9 +791,6 @@ def update_dashboard(_, include_figure=True):
     Output("brake-title", "children"),
     Output("brake-box", "style"),
     Output("brake-warning", "children"),
-    Output("steering-title", "children"),
-    Output("steering-box", "style"),
-    Output("steering-warning", "children"),
     Output("speed-title", "children"),
     Output("speed-box", "style"),
     Output("speed-warning", "children"),
@@ -826,7 +802,7 @@ def update_dashboard(_, include_figure=True):
 )
 def update_sensor_cards(n):
     result = update_dashboard(n, include_figure=False)
-    return (*result[:5], *result[6:])
+    return (*result[:4], *result[5:])
 
 
 @app.callback(Output("telemetry-graphs", "figure"), Output("telemetry-graphs", "extendData"),
@@ -849,9 +825,9 @@ def update_sensor_graph(_, live_revision, previous):
         ranges = [channel_range("throttle_percent", arrays[1], throttle_millivolts=millivolts)]
     else:
         with telemetry_lock:
-            arrays = [list(h) for h in (time_history, throttle_history, brake_history, steering_history, speed_history)]
+            arrays = [list(h) for h in (time_history, throttle_history, brake_history, speed_history)]
             revision, generation = history_revision, history_generation
-        ranges = [channel_range(field, values) for field, values in zip(FAST_FIELDS, arrays[1:])]
+        ranges = [channel_range(field, values) for field, values in zip(DASHBOARD_FIELDS, arrays[1:])]
     current = {"revision": revision, "generation": generation, "live": live_revision, "ranges": ranges}
     added = revision - previous["revision"] if previous else 0
     if (not previous or previous["generation"] != generation or previous["live"] != live_revision

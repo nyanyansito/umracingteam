@@ -211,7 +211,7 @@ The dashboard provides:
 - Current, last and best lap times, live delta, GPS top speeds and a lap table.
 - A GPS track trace with distinct current/reference lines. Colour the current
   trace by pedal activity, speed, throttle or brake pressure.
-- Full-lap throttle, brake, steering and speed plots, aligned to reference
+- Full-lap throttle, brake and speed plots, aligned to reference
   distance, with reference traces underneath the live lap.
 - A rolling 1,000-sample sensor view (about 10 seconds at 100 Hz), updated at
   10 Hz using incremental appends. Sequence gaps and restarts break/reset traces.
