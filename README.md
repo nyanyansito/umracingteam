@@ -82,10 +82,13 @@ open-drain I²C with internal pulls disabled. With both boards off, wire ADS1115
 `SCL` to `PB6` and `SDA` to `PB7`. Power the STM32 before enabling the 5 V supply
 to the ADS1115 and sensor. Switch that supply off before cutting STM32 power.
 
-Start the dashboard with the same `--hardware-port` command above. **Live Pedal
-Inputs** shows separate throttle and brake percentage traces on a shared time
+Start the dashboard with the same `--hardware-port` command above. **Live Telemetry
+History** shows separate throttle and brake percentage traces on a shared time
 axis. The brake card also shows the raw voltage. At zero pressure, compare it
 with the voltage at `A0`, about 0.49 V on the tested sensor.
+
+Add `--brake-disconnected` when running with the brake sensor unplugged. The
+brake card and graph row show the disconnected state and ignore brake ADC frames.
 
 The brake percentage uses 0.490 V as released and 4.500 V as a provisional
 full-scale input. It represents the selected voltage span. Use

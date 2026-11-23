@@ -1,11 +1,11 @@
 :root {
     color-scheme: dark;
-    --page: #0b0e14;
-    --panel: #121720;
-    --line: #2b3544;
-    --text: #f0f4fa;
-    --muted: #a4b1c4;
-    --orange: #ff9655;
+    --page: #06215f;
+    --panel: #0d1e42;
+    --line: #354d7e;
+    --text: #eef3ff;
+    --muted: #b9c6de;
+    --orange: #ffb744;
     --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
     background: var(--page);
 }
@@ -19,38 +19,34 @@ body {
     max-width: 1600px;
     min-height: 100vh;
     margin-inline: auto;
-    padding: clamp(12px, 2.6vw, 36px);
+    padding: clamp(10px, 1.5vw, 24px);
     color: var(--text);
-    font-family: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
-    background: radial-gradient(ellipse at 100% 0, #1b1d25, transparent 460px);
+    font-family: "Segoe UI", system-ui, sans-serif;
 }
 
 .pit-header {
     box-sizing: border-box;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: clamp(12px, 2vw, 24px);
-    min-height: 106px;
+    min-height: 116px;
     padding: 16px clamp(14px, 2vw, 26px);
     border: 1px solid var(--line);
-    border-top: 3px solid var(--orange);
+    border-top: 3px solid transparent;
     border-radius: 10px;
     background:
-        linear-gradient(130deg, transparent 73%, #ff96551c 73% 75%, transparent 75% 76%, #ff96550e 76% 84%, transparent 84%),
-        linear-gradient(100deg, #181f2b, #10141b 75%);
+        linear-gradient(100deg, #08245f, #0d1e42 45%, #08245f) padding-box,
+        linear-gradient(90deg, var(--orange), #ff671f 55%, #ef4444) border-box;
 }
 
 .team-mark {
     display: flex;
-    flex: 0 0 clamp(58px, 8vw, 98px);
+    flex: 0 0 clamp(105px, 15vw, 205px);
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    height: clamp(50px, 6vw, 66px);
-    padding: 6px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: #0b1018;
+    height: 58px;
     color: var(--orange);
     font-size: clamp(17px, 2.6vw, 27px);
     font-weight: 900;
@@ -65,7 +61,7 @@ body {
 }
 
 .team-name {
-    margin: 0 0 4px;
+    margin: 0 0 9px;
     color: var(--orange);
     font: 700 11px/1.4 var(--mono);
     letter-spacing: .16em;
@@ -74,21 +70,25 @@ body {
 
 .pit-header h1 {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     flex-wrap: wrap;
     gap: 4px 14px;
     margin: 0;
-    font-size: clamp(26px, 4vw, 46px);
+    font-size: 13px;
     font-weight: 800;
     line-height: 1;
-    letter-spacing: -.055em;
+    letter-spacing: .12em;
+    text-transform: uppercase;
 }
 
 .pit-header h1 span {
-    color: var(--muted);
-    font-size: .38em;
-    font-weight: 500;
-    letter-spacing: .015em;
+    padding: 5px 8px;
+    border: 1px solid var(--orange);
+    border-radius: 4px;
+    color: var(--orange);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
 }
 
 .status-strip {
@@ -115,7 +115,7 @@ body {
 .lap-status {
     margin: 0;
     color: var(--muted);
-    font: 12px/1.55 var(--mono);
+    font: 12px/1.55 "Segoe UI", system-ui, sans-serif;
 }
 
 .sensor-metrics,
@@ -169,13 +169,12 @@ body {
 
 .metric-value {
     margin: 0;
-    font: 700 clamp(15px, 1.9vw, 26px)/1.2 var(--mono);
+    font: 700 14px/1.35 "Segoe UI", system-ui, sans-serif;
     font-variant-numeric: tabular-nums;
-    letter-spacing: -.055em;
 }
 
 .sensor-metrics .metric-value {
-    font-size: clamp(22px, 3vw, 38px);
+    color: var(--accent);
 }
 
 .metric-card--clock .metric-value {
@@ -183,7 +182,6 @@ body {
 }
 
 .metric-detail {
-    min-height: 2.55em;
     margin: 5px 0 0;
     color: #c0cbd9;
     font-size: 12px;
@@ -197,11 +195,11 @@ body {
 .pit-controls {
     --Dash-Text-Strong: var(--text);
     --Dash-Text-Weak: var(--muted);
-    --Dash-Fill-Inverse-Strong: #0b111a;
+    --Dash-Fill-Inverse-Strong: #06215f;
     --Dash-Fill-Interactive-Strong: var(--orange);
-    --Dash-Fill-Interactive-Weak: #1c2634;
+    --Dash-Fill-Interactive-Weak: #15356c;
     --Dash-Fill-Disabled: var(--line);
-    --Dash-Shading-Weak: #293345;
+    --Dash-Shading-Weak: #1f3d72;
     --Dash-Stroke-Strong: var(--line);
     display: flex;
     align-items: end;
@@ -241,7 +239,7 @@ body {
 /* Keep the same palette on versions of Dash that use react-select. */
 .pit-select .Select-control,
 .pit-select .Select-menu-outer {
-    background: #0b111a;
+    background: #06215f;
     border-color: var(--line);
 }
 
@@ -251,16 +249,16 @@ body {
 }
 
 .pit-select .VirtualizedSelectFocusedOption {
-    background: #293345;
+    background: #1f3d72;
 }
 
 #return-live {
     min-height: 36px;
     padding: 6px 13px;
-    border: 1px solid #9b5b38;
+    border: 1px solid var(--orange);
     border-radius: 5px;
     background: #2b201b;
-    color: #ffc49d;
+    color: var(--orange);
     cursor: pointer;
     font-family: inherit;
     font-size: 12px;
@@ -284,7 +282,7 @@ body {
 
 .track-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.8fr) minmax(285px, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
     margin-bottom: 12px;
 }
@@ -311,6 +309,7 @@ body {
 }
 
 .lap-panel {
+    margin-bottom: 12px;
     padding: 14px;
 }
 

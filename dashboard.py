@@ -232,9 +232,9 @@ team_logo = (html.Img(src=app.get_asset_url(logo_asset), alt="UM Racing logo")
 
 box_style = {"color": "var(--text)"}
 plot_style = {
-    "paper_bgcolor": "#121720",
-    "plot_bgcolor": "#0e131c",
-    "font": {"family": "Bahnschrift, Segoe UI, system-ui, sans-serif", "color": "#b6c3d6"},
+    "paper_bgcolor": "#0d1e42",
+    "plot_bgcolor": "#0a1731",
+    "font": {"family": "Segoe UI, system-ui, sans-serif", "color": "#eef3ff"},
 }
 
 # ADDED: (component id prefix, wire field name, title shown on the box)
@@ -267,11 +267,11 @@ def make_metric_box(key, title):
 app.layout = html.Div(
     [
         html.Header([
-            html.Div(team_logo, className="team-mark"),
             html.Div([
                 html.P("UM Racing / Car 01", className="team-name"),
                 html.H1(["Pit Wall", html.Span("Live telemetry")]),
             ]),
+            html.Div(team_logo, className="team-mark"),
         ], className="pit-header"),
         html.Div([
             html.Div(id="validation-status", className="validation-status"),
@@ -302,11 +302,11 @@ app.layout = html.Div(
         dcc.Store(id="sensor-view-state"), dcc.Store(id="lap-view-state"),
         html.Div([
             dcc.Graph(id="track-trace", className="graph-panel"),
-            html.Div([html.H3("Session laps"), html.Div(id="lap-history")],
-                     className="lap-panel"),
+            dcc.Graph(id="telemetry-graphs", className="graph-panel",
+                      figure=go.Figure(layout=go.Layout(**plot_style, template="plotly_dark"))),
         ], className="track-grid"),
+        html.Div([html.H3("Session laps"), html.Div(id="lap-history")], className="lap-panel"),
         dcc.Graph(id="lap-delta-graph", className="graph-panel"),
-        dcc.Graph(id="telemetry-graphs", className="graph-panel"),
         dcc.Graph(id="lap-input-graphs", className="graph-panel"),
 
         dcc.Interval(
@@ -386,7 +386,7 @@ def lap_figures(state, colour="inputs", inspection=None, live_revision=0):
             figure.add_trace(go.Scatter(x=[point[0]], y=[point[1]], mode="markers", name="Inspection",
                                        marker={"size": 16, "color": "#f8fafc", "symbol": "circle-open", "line": {"width": 3}}, hoverinfo="skip"))
     figure.update_layout(**plot_style, template="plotly_dark",
-                         title="Red Bull Ring · Austria" if outline else "GPS track trace", height=420, uirevision=f"track:{live_revision}",
+                         title="Red Bull Ring · Austria" if outline else "GPS track trace", height=500, uirevision=f"track:{live_revision}",
                          xaxis_title="East (m)", yaxis_title="North (m)",
                          yaxis={"scaleanchor": "x", "scaleratio": 1}, margin={"t": 55, "b": 45, "l": 55, "r": 20})
     if not current and not reference:
@@ -587,7 +587,7 @@ def make_sensor_figure(graph_times, graph_throttle, graph_brake, graph_speed):
     figure.update_layout(
         **plot_style,
         template="plotly_dark",
-        height=1000,
+        height=500,
         showlegend=False,
         title="Live Telemetry History",
         uirevision="sensors",
@@ -610,22 +610,27 @@ def make_throttle_bench_figure(times, values, *, millivolts):
     )
 
 
-def make_live_pedal_figure(throttle, brake):
-    figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
-    for row, name, color, samples in (
-        (1, "Throttle", THROTTLE_GREEN, throttle),
-        (2, "Brake", "#f87171", brake),
+def make_live_pedal_figure(throttle, brake, *, brake_disconnected=False):
+    figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.14,
+                           subplot_titles=("Throttle Position", "Brake Input"))
+    for row, name, color, samples, waiting in (
+        (1, "Throttle", THROTTLE_GREEN, throttle, "Waiting for calibrated throttle data"),
+        (2, "Brake", "#ff671f", () if brake_disconnected else brake,
+         "Brake sensor disconnected" if brake_disconnected else "Waiting for brake data"),
     ):
         times, values = zip(*samples) if samples else ([], [])
         figure.add_trace(go.Scatter(
-            x=times, y=values, name=name, mode="lines+markers",
-            line={"color": color, "width": 2}, marker={"size": 3}, connectgaps=False,
+            x=times, y=values, name=name, mode="lines",
+            line={"color": color, "width": 2}, connectgaps=False,
             hovertemplate="%{x:.2f} s · %{y:.1f}%<extra>" + name + "</extra>",
         ), row=row, col=1)
-        figure.update_yaxes(title_text=f"{name} (%)", range=[0, 100], dtick=25, row=row, col=1)
-    figure.update_xaxes(title_text="Elapsed time (s)", row=2, col=1)
+        figure.update_yaxes(title_text=f"{name} (%)", range=[0, 100], dtick=50, row=row, col=1)
+        if not any(value is not None for value in values):
+            figure.add_annotation(text=waiting, x=0.5, y=0.5, xref="x domain", yref="y domain",
+                                  showarrow=False, row=row, col=1)
+    figure.update_xaxes(title_text="Time (seconds)", row=2, col=1)
     figure.update_layout(**plot_style, template="plotly_dark",
-                         title="Live Pedal Inputs", height=500, showlegend=False,
+                         title="Live Telemetry History", height=500, showlegend=False,
                          margin={"l": 65, "r": 28, "t": 55, "b": 55})
     return figure
 
@@ -668,7 +673,7 @@ def update_hardware_cards(include_figure):
             else:
                 value, detail = f"{percent:.1f} %", f"{millivolts:.1f} mV"
         _, brake_volts, brake_detail = source.brake_snapshot()
-        if brake_detail and brake_detail != "Waiting for brake data":
+        if brake_detail and brake_detail != "Waiting for brake data" and not source.brake_disconnected:
             brake_style = alert_box_style
         if brake_volts is not None:
             percent = source.brake_calibration.percent(brake_volts)
@@ -677,7 +682,7 @@ def update_hardware_cards(include_figure):
             brake_detail = " · ".join(filter(None, (f"{brake_volts:.3f} V", brake_detail)))
         if include_figure:
             throttle, brake, _, _ = source.pedal_history()
-            figure = make_live_pedal_figure(throttle, brake)
+            figure = make_live_pedal_figure(throttle, brake, brake_disconnected=source.brake_disconnected)
 
     outputs = []
     for key, _, title in METRIC_BOXES:
@@ -690,7 +695,7 @@ def update_hardware_cards(include_figure):
     link = "ESP32 Wi-Fi" if source.port.startswith("socket://") else "STM32 USB"
     label = "Hardware data · throttle bench" if throttle_only else "Hardware data · GPS and pedal inputs"
     return (value, brake_value, "—", f"{link} · {status}{age_label}", figure, *outputs, label, {
-                "backgroundColor": "#152539", "color": "#bfdbfe",
+                "backgroundColor": "#082456", "color": "#e4efff",
             })
 
 
@@ -820,7 +825,7 @@ def update_sensor_graph(_, live_revision, previous):
             current = {"revision": revision, "generation": generation, "live": live_revision}
             if previous == current:
                 return no_update, no_update, no_update
-            figure = make_live_pedal_figure(throttle, brake)
+            figure = make_live_pedal_figure(throttle, brake, brake_disconnected=source.brake_disconnected)
             figure.update_layout(uirevision=f"pedals:{generation}:{live_revision}")
             return figure, no_update, current
         arrays, revision, generation = source.sensor_history()
@@ -919,6 +924,8 @@ def main(argv=None):
                         help="Save the supplied throttle endpoints for later launches on this hardware port")
     parser.add_argument("--brake-calibration-v", nargs=2, type=float, metavar=("RELEASED", "FULL_SCALE"),
                         help="Set the brake percentage endpoints in volts (default: 0.490 and 4.500 V)")
+    parser.add_argument("--brake-disconnected", action="store_true",
+                        help="Ignore brake ADC messages while the brake sensor is unplugged")
     args = parser.parse_args(argv)
     if args.throttle_bench and not args.hardware_port:
         parser.error("--throttle-bench requires --hardware-port.")
@@ -928,6 +935,8 @@ def main(argv=None):
         parser.error("--save-throttle-calibration requires --throttle-calibration-mv RELEASED PRESSED.")
     if args.brake_calibration_v is not None and (not args.hardware_port or args.throttle_bench):
         parser.error("--brake-calibration-v requires combined hardware mode.")
+    if args.brake_disconnected and (not args.hardware_port or args.throttle_bench or args.brake_calibration_v):
+        parser.error("--brake-disconnected requires combined hardware mode without --brake-calibration-v.")
     if args.hardware_port:
         from hardware_bench import BrakeCalibration, SerialBench, ThrottleCalibration
 
@@ -952,7 +961,11 @@ def main(argv=None):
                 print(f"Loaded throttle calibration: {calibration.released_mv:g} mV released, "
                       f"{calibration.pressed_mv:g} mV pressed")
         hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench,
-                                      brake_calibration=brake_calibration)
+                                      brake_calibration=brake_calibration, brake_disconnected=args.brake_disconnected)
+        if not args.throttle_bench:
+            app.layout["telemetry-graphs"].figure = make_live_pedal_figure(
+                [], [], brake_disconnected=args.brake_disconnected,
+            )
         reader = threading.Thread(target=hardware_source.read, name="hardware-telemetry", daemon=True)
         reader.start()
         app.layout["lap-input-graphs"].style = {"display": "none"}

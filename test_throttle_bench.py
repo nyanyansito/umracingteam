@@ -8,6 +8,35 @@ from hardware_bench import SerialBench, ThrottleCalibration
 
 
 class ThrottleBenchTest(unittest.TestCase):
+    def test_dashboard_seeds_themed_pedals_and_ignores_disconnected_brake_frames(self):
+        graph = dashboard.app.layout["telemetry-graphs"]
+
+        def check_display(**_):
+            initial = graph.figure
+            self.assertEqual(initial.layout.paper_bgcolor, dashboard.plot_style["paper_bgcolor"])
+            self.assertEqual([trace.yaxis for trace in initial.data], ["y", "y2"])
+            self.assertIn("Waiting for calibrated throttle data", [note.text for note in initial.layout.annotations])
+            self.assertIn("Brake sensor disconnected", [note.text for note in initial.layout.annotations])
+
+            source = dashboard.hardware_source
+            source.receive(b"BRAKE_V=0.588\n")
+            source.receive(b"BRAKE_I2C_ERROR\n")
+            source.receive(b"UMR_THROTTLE,3304\n")
+            cards = dashboard.update_hardware_cards(False)
+            self.assertEqual(cards[:2], ("100.0 %", "—"))
+            self.assertIn("Brake sensor disconnected", cards)
+            plot, _, _ = dashboard.update_sensor_graph(1, 0, None)
+            self.assertEqual(plot.layout.paper_bgcolor, initial.layout.paper_bgcolor)
+            self.assertEqual(list(plot.data[0].y), [100])
+            self.assertEqual(list(plot.data[1].y), [])
+
+        with (patch.object(graph, "figure", graph.figure),
+              patch.object(SerialBench, "read"),
+              patch.object(dashboard.app, "run", side_effect=check_display) as run):
+            dashboard.main(["--hardware-port", "COM5", "--throttle-calibration-mv", "91.5", "413",
+                            "--brake-disconnected"])
+        run.assert_called_once()
+
     def test_dashboard_saves_and_reuses_calibration_for_the_same_port_and_mode(self):
         port = "socket://192.168.4.1:9000"
         saved = ThrottleCalibration(91.5, 413)

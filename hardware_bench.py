@@ -157,10 +157,12 @@ def rmc_fix(fields):
 
 class SerialBench:
     def __init__(self, port, calibration=None, *, throttle_only=False,
-                 track_configured=TRACK_ID != "red_bull_ring", brake_calibration=None):
+                 track_configured=TRACK_ID != "red_bull_ring", brake_calibration=None,
+                 brake_disconnected=False):
         self.port = port
         self.calibration = calibration
         self.brake_calibration = brake_calibration or BrakeCalibration()
+        self.brake_disconnected = brake_disconnected
         self.throttle_only = throttle_only
         self.lock = threading.Lock()
         self.stop = threading.Event()
@@ -200,6 +202,8 @@ class SerialBench:
 
         brake = BRAKE_FRAME.fullmatch(frame)
         if brake is not None or frame == b"BRAKE_I2C_ERROR":
+            if self.brake_disconnected:
+                return
             volts = None if brake is None else float(brake[1])
             with self.lock:
                 if self.brake_time is not None and now - self.brake_time > SENSOR_TIMEOUT:
@@ -266,6 +270,8 @@ class SerialBench:
 
     def brake_snapshot(self):
         with self.lock:
+            if self.brake_disconnected:
+                return False, None, "Brake sensor disconnected"
             if self.brake_time is None:
                 return self.brake_seen, None, self.brake_status
             if time.monotonic() - self.brake_time > SENSOR_TIMEOUT:
