@@ -124,3 +124,55 @@ from the OSM map API for the bounding box recorded inside the GeoJSON.
 
 The receiver uses UBX-CFG-MSG and UBX-CFG-RATE on the current UART.
 [u-blox M8 protocol manual](https://content.u-blox.com/sites/default/files/products/documents/u-blox8-M8_ReceiverDescrProtSpec_UBX-13003221.pdf)
+
+## Two ESP32 boards
+
+The car ESP32 hosts **UMR-GPS-Test** and receives the STM32's telemetry UART.
+The pit ESP32 joins that network and forwards the same timestamped frames via
+USB. The pit laptop can stay on its normal Wi-Fi for online street maps.
+
+### Metatronik ESP32-S3 on the car
+
+1. Open `firmware/telemetry_wifi_esp32/telemetry_wifi_esp32.ino` in Arduino IDE.
+   For the generic ESP32-S3 N16R8, select **ESP32S3 Dev Module** in the Espressif
+   ESP32 package and the board's **UART** USB port. Use a USB data cable.
+2. Upload over USB with the board separate from car power. If your exact board
+   uses an external antenna, confirm its antenna/connector arrangement with the
+   board documentation and attach the compatible antenna before powering it
+   for a radio test.
+3. With power off, move the car's **STM32 PB10 (TX) → ESP32 GPIO18 (RX)** and
+   **GND → GND** connections to the Metatronik board. Use the board's documented
+   power input and your existing compatible 3.3 V UART wiring. The car ESP32
+   requires only RX for telemetry. Power the car telemetry and check that
+   **UMR-GPS-Test** appears.
+
+### Original ESP32 at the pit
+
+1. Open `firmware/telemetry_pit_esp32/telemetry_pit_esp32.ino` and upload it to
+   the original ESP32. For the existing ESP32-S3 with a USB-UART bridge, use
+   **ESP32S3 Dev Module**, the **UART** USB-C port and **USB CDC On Boot →
+   Disabled**. If using the S3's **native USB** port instead, use **USB CDC On
+   Boot → Enabled** and select the COM port that appears after reset.
+2. Keep the pit board connected to the laptop by USB. It needs no connection
+   to the STM32 or the car's ground. Open Arduino Serial Monitor at **115200**
+   to check for raw lines such as `STM32_ALIVE`, `UMR_ADC` and `UMR_RMC`.
+   A raw `UMR_RMC` line can appear before GPS acquires a fix.
+3. Close Serial Monitor and stop any dashboard still reading the car's Wi-Fi
+   socket. The car sketch serves one TCP client. From PowerShell, start the
+   dashboard with the pit board's COM port, replacing `COM7` in this example.
+
+```powershell
+.\.venv\Scripts\python.exe dashboard.py --hardware-port COM7
+```
+
+For the first run on the new port, if the throttle shows mV, reuse your
+previous measured released and pressed endpoints with
+`--throttle-calibration-mv RELEASED PRESSED --save-throttle-calibration`. The
+dashboard stores throttle calibration per port. Run the same COM command with
+your existing `--brake-calibration-v` values if you calibrated the brake.
+
+Open [the dashboard](http://127.0.0.1:8050) and check both pedal graphs and the
+GPS status. With the updated STM32 sketch and a valid fix, look for about 50 Hz
+per pedal, about 5 Hz GPS and **PPS aligned** when PPS and both calibrations are
+available. Verify the link first with both boards nearby, then at the intended
+pit location.
