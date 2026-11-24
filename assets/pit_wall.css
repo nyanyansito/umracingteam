@@ -384,3 +384,21 @@ body {
     .lap-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .pit-controls > label { flex-basis: 100%; }
 }
+
+#hardware-map-panel {
+    background: #112239;
+    color: #e1eaf5;
+    padding: .75rem;
+    border-radius: .5rem;
+    font-size: .9rem;
+}
+#hardware-map-mode label, #hardware-map-follow label {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    margin-right: .9rem;
+    padding: .35rem 0;
+}
+#hardware-map-status { margin: .4rem 0; }
+#hardware-map-panel a { color: #a8d9ff; }
+#hardware-map-panel summary { cursor: pointer; margin-top: .6rem; }

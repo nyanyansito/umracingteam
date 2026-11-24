@@ -21,10 +21,12 @@ from telemetry_config import BROKER, PORT, DASHBOARD_HOST, DASHBOARD_PORT
 from sample_order import SampleOrder, sample_key
 from data_processing import CHANNEL_SPECS
 from telemetry_views import DASHBOARD_FIELDS, THROTTLE_GREEN, lap_input_figure, stream_figure
+from venue_map import area_status, build_map, load_course
 from lap_stream import RemoteLapAnalysis, STATE_TOPIC, UPDATE_TOPIC, REQUEST_TOPIC, REFERENCE_TOPIC
 
 
 TOPIC = "umf1/car01/telemetry/fast"
+hardware_course = []
 THROTTLE_CALIBRATION_DIR = Path(__file__).resolve().parent / "logs" / "throttle-calibration"
 
 # ADDED: validated copy of the fast telemetry, published by data_processing.py
@@ -301,7 +303,26 @@ app.layout = html.Div(
         dcc.Store(id="inspection"), dcc.Store(id="input-view-state"),
         dcc.Store(id="sensor-view-state"), dcc.Store(id="lap-view-state"),
         html.Div([
-            dcc.Graph(id="track-trace", className="graph-panel"),
+            html.Div([
+                dcc.Graph(id="track-trace", className="graph-panel"),
+                html.Div([
+                    dcc.RadioItems(id="hardware-map-mode", value="track", inline=True,
+                                   options=[{"label": label, "value": value} for value, label in
+                                            (("online", "Live Street · Online"), ("offline", "Live Street · Offline"),
+                                             ("track", "Track Only"))]),
+                    dcc.Checklist(id="hardware-map-follow", options=[{"label": "Follow car", "value": "follow"}],
+                                  value=["follow"]),
+                    dcc.Graph(id="hardware-map", className="graph-panel", clear_on_unhover=True, config={"scrollZoom": True}),
+                    html.Div(id="hardware-map-status", role="status"),
+                    html.Div(["Street data © ", html.A("OpenStreetMap contributors",
+                             href="https://www.openstreetmap.org/copyright")]),
+                    html.Details([html.Summary("Competition course drawing"), html.Img(
+                        src="/assets/competition-layout.png", alt="Competition course reference with start and finish",
+                        style={"maxWidth": "100%"})]),
+                    dcc.Store(id="hardware-map-view"),
+                    dcc.Interval(id="hardware-map-refresh", interval=200, disabled=True),
+                ], id="hardware-map-panel", style={"display": "none"}),
+            ]),
             dcc.Graph(id="telemetry-graphs", className="graph-panel",
                       figure=go.Figure(layout=go.Layout(**plot_style, template="plotly_dark"))),
         ], className="track-grid"),
@@ -815,17 +836,37 @@ def update_sensor_cards(n):
 
 @app.callback(Output("telemetry-graphs", "figure"), Output("telemetry-graphs", "extendData"),
               Output("sensor-view-state", "data"), Input("sensor-update", "n_intervals"),
-              Input("return-live", "n_clicks"), State("sensor-view-state", "data"),
+              Input("return-live", "n_clicks"), State("sensor-view-state", "data"), State("hardware-map", "hoverData"),
               running=[(Output("sensor-update", "disabled"), True, False)])
-def update_sensor_graph(_, live_revision, previous):
+def update_sensor_graph(_, live_revision, previous, map_hover=None):
     source = hardware_source
     if source is not None:
         if not source.throttle_only:
             throttle, brake, revision, generation = source.pedal_history()
-            current = {"revision": revision, "generation": generation, "live": live_revision}
+            hovered = (map_hover or {}).get("points") or [{}]
+            cursor = hovered[0].get("customdata")
+            channels = (throttle, brake)
+            ends = [samples[-1][0] if samples else None for samples in channels]
+            ready = [any(value is not None for _, value in reversed(samples)) for samples in channels]
+            current = {"revision": revision, "generation": generation, "live": live_revision,
+                       "cursor": cursor, "ends": ends, "ready": ready}
             if previous == current:
                 return no_update, no_update, no_update
+            if previous and all(previous.get(k) == current[k] for k in ("generation", "live", "cursor", "ready")):
+                additions = []
+                for samples, end in zip(channels, previous.get("ends", [])):
+                    start = next((i+1 for i in range(len(samples)-1, -1, -1) if samples[i][0] == end), None)
+                    if samples and start is None:
+                        break
+                    additions.append(samples[start or 0:])
+                if len(additions) == 2:
+                    extension = {"x": [[t for t, _ in chunk] for chunk in additions],
+                                 "y": [[v for _, v in chunk] for chunk in additions]}
+                    return no_update, [extension, [0, 1], 1000], current
             figure = make_live_pedal_figure(throttle, brake, brake_disconnected=source.brake_disconnected)
+            if is_number(cursor) and any(samples and samples[0][0] is not None and
+                                         samples[0][0] <= cursor <= samples[-1][0] for samples in (throttle, brake)):
+                figure.add_vline(x=cursor, line_color="#f8fafc", line_dash="dot")
             figure.update_layout(uirevision=f"pedals:{generation}:{live_revision}")
             return figure, no_update, current
         arrays, revision, generation = source.sensor_history()
@@ -910,8 +951,25 @@ def choose_reference(value):
     return "Reference requested for this session" if result.rc == mqtt.MQTT_ERR_SUCCESS else "Lap service unavailable"
 
 
+@app.callback(Output("hardware-map", "figure"), Output("hardware-map-view", "data"),
+              Output("hardware-map-status", "children"),
+              Input("hardware-map-refresh", "n_intervals"), Input("hardware-map-mode", "value"),
+              Input("hardware-map-follow", "value"), State("hardware-map-view", "data"))
+def update_hardware_map(_, mode, follow, previous):
+    if hardware_source is None or hardware_source.throttle_only:
+        return no_update, no_update, no_update
+    points, fresh, sync, generation, age = hardware_source.map_snapshot()
+    figure, meta = build_map(mode, points, fresh, hardware_course, "follow" in (follow or []), previous, generation)
+    status = "Waiting for valid GPS fix"
+    if points:
+        status = "Live GPS" if fresh else "Last known position"
+        if age is not None:
+            status += f" · {age:.1f} s old"
+    return figure, meta, " · ".join(filter(None, (status, sync, area_status(mode, points, hardware_course))))
+
+
 def main(argv=None):
-    global hardware_source
+    global hardware_source, hardware_course
 
     parser = argparse.ArgumentParser(description="Run the UMR telemetry dashboard.")
     parser.add_argument("--hardware-port", metavar="PORT",
@@ -926,7 +984,15 @@ def main(argv=None):
                         help="Set the brake percentage endpoints in volts (default: 0.490 and 4.500 V)")
     parser.add_argument("--brake-disconnected", action="store_true",
                         help="Ignore brake ADC messages while the brake sensor is unplugged")
+    parser.add_argument("--course", type=Path, help="Measured WGS84 course GeoJSON LineString")
+    parser.add_argument("--hardware-record", type=Path, help="Record raw hardware frames to a new file")
     args = parser.parse_args(argv)
+    if (args.course or args.hardware_record) and not args.hardware_port:
+        parser.error("--course and --hardware-record require --hardware-port")
+    try:
+        hardware_course = load_course(args.course) if args.course else []
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(f"Cannot load course: {error}")
     if args.throttle_bench and not args.hardware_port:
         parser.error("--throttle-bench requires --hardware-port.")
     if args.throttle_calibration_mv is not None and not args.hardware_port:
@@ -960,9 +1026,20 @@ def main(argv=None):
             if calibration is not None:
                 print(f"Loaded throttle calibration: {calibration.released_mv:g} mV released, "
                       f"{calibration.pressed_mv:g} mV pressed")
+        record = None
+        if args.hardware_record:
+            try:
+                args.hardware_record.parent.mkdir(parents=True, exist_ok=True)
+                record = args.hardware_record.open("xb")
+            except OSError as error:
+                parser.error(f"Cannot create new hardware recording: {error}")
         hardware_source = SerialBench(args.hardware_port, calibration, throttle_only=args.throttle_bench,
-                                      brake_calibration=brake_calibration, brake_disconnected=args.brake_disconnected)
+                                      brake_calibration=brake_calibration, brake_disconnected=args.brake_disconnected, record=record)
         if not args.throttle_bench:
+            app.layout["hardware-map-panel"].style = {}
+            app.layout["hardware-map-refresh"].disabled = False
+            app.layout["track-trace"].style = {"display": "none"}
+            app.layout["dashboard-update"].interval = 100
             app.layout["telemetry-graphs"].figure = make_live_pedal_figure(
                 [], [], brake_disconnected=args.brake_disconnected,
             )
@@ -975,6 +1052,8 @@ def main(argv=None):
         finally:
             hardware_source.stop.set()
             reader.join()
+            if record:
+                record.close()
             hardware_source = None
         return
 

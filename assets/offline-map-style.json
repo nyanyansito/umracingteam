@@ -1,0 +1,28 @@
+{
+  "version": 8,
+  "sources": {
+    "streets": {
+      "type": "geojson",
+      "data": "/assets/venue-roads.geojson",
+      "attribution": "\u00a9 OpenStreetMap contributors"
+    }
+  },
+  "layers": [
+    {
+      "id": "ground",
+      "type": "background",
+      "paint": {
+        "background-color": "#15243a"
+      }
+    },
+    {
+      "id": "venue-streets",
+      "source": "streets",
+      "type": "line",
+      "paint": {
+        "line-color": "#718399",
+        "line-width": 2
+      }
+    }
+  ]
+}

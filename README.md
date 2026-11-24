@@ -19,6 +19,12 @@ python -m pip install -r requirements.txt
 
 Install Mosquitto separately. MQTT Explorer is optional for inspecting traffic.
 
+### Synchronized pedals and live maps
+
+Use the [Windows bench and venue guide](SYNCED_MAPS.md) for the timestamped STM32 sketch,
+PPS wiring, recording, and the online, offline and track-only views. The hardware
+dashboard also accepts older GPS and pedal frames.
+
 ### Test real GPS over Wi-Fi
 
 The hardware test passed with both sketches below. The laptop received real GPS

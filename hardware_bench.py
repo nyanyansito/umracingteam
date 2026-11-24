@@ -10,6 +10,7 @@ import time
 
 import serial
 
+from pedal_sync import MOD, PedalClock, elapsed
 from lap_analysis import LapAnalysis
 from lap_timer import LapTimer
 from session_store import write_json
@@ -158,7 +159,10 @@ def rmc_fix(fields):
 class SerialBench:
     def __init__(self, port, calibration=None, *, throttle_only=False,
                  track_configured=TRACK_ID != "red_bull_ring", brake_calibration=None,
-                 brake_disconnected=False):
+                 brake_disconnected=False, record=None):
+        self.last_map_point = None
+        self.last_valid_arrival = None
+        self.record = record
         self.port = port
         self.calibration = calibration
         self.brake_calibration = brake_calibration or BrakeCalibration()
@@ -185,6 +189,12 @@ class SerialBench:
             self.nmea_time = None
             self.rmc_time = None
             self.position = None
+            self.pedal_clock = PedalClock()
+            self.map_points = deque(maxlen=1000)
+            self.map_break = False
+            self.fix_times = deque(maxlen=16)
+            self.sync_status = "Waiting for timestamped GPS"
+            self.match_offset = None
             self.history.clear()
             self.brake_history.clear()
             self.generation += 1
@@ -196,6 +206,25 @@ class SerialBench:
             return  # Incomplete frame, or a line longer than the read limit.
         frame = line.rstrip(b"\r\n")
         now = time.monotonic()
+        if self.record is not None:
+            self.record.write(line)
+        if frame == b"UMR_BOOT":
+            self.connection_changed(self.status)
+            return
+        if frame.startswith(b"UMR_ADC,"):
+            self.receive_adc(frame, now)
+            return
+        stamp = None
+        if frame.startswith(b"UMR_RMC,"):
+            parts = frame.split(b",", 3)
+            if len(parts) != 4 or not parts[1].isdigit() or (parts[2] and not parts[2].isdigit()):
+                return
+            rx = int(parts[1])
+            pulse = int(parts[2]) if parts[2] else None
+            if rx >= MOD or (pulse is not None and pulse >= MOD):
+                return
+            stamp = rx, pulse
+            frame = parts[3]
         if self.throttle_only or frame.startswith(b"UMR_THROTTLE,"):
             self.receive_throttle(frame, now)
             return
@@ -233,15 +262,96 @@ class SerialBench:
                 self.lap.interrupt()
                 self.rmc_time = now
                 self.position = None
+                self.map_break = True
+                self.fix_times.clear()
                 return
             # The GPS source clock drives lap timing. A host-side outage must
             # still break the trace, even if a receiver replays a recent fix.
             if self.rmc_time is not None and now - self.rmc_time > GPS_TIMEOUT:
                 self.lap.interrupt()
+            separated = self.map_break or (self.rmc_time is not None and now - self.rmc_time > GPS_TIMEOUT)
+            if stamp is None:
+                values, status, offset = {}, "GPS only · no source timestamps", None
+            else:
+                fraction = int((fields[1].partition(".")[2] + "000")[:3])
+                values, status, offset = self.pedal_clock.match(*stamp, fraction)
+                fix.update(values)
+            continuity = self.lap.timer.continuity_version
             self.lap.update(fix, now)
+            separated = separated or continuity != self.lap.timer.continuity_version
             if self.lap.timer.source_status not in ("late", "duplicate"):
                 self.rmc_time = now
                 self.position = (fix["latitude"], fix["longitude"])
+                tick = fix["timestamp_ms"]
+                if self.fix_times and not 0 < elapsed(tick, self.fix_times[-1]) <= GPS_TIMEOUT * 1000:
+                    separated = True
+                if separated:
+                    self.fix_times.clear()
+                self.fix_times.append(tick)
+                if len(self.map_points) == self.map_points.maxlen:
+                    for _ in range(128):
+                        self.map_points.popleft()
+                self.map_points.append((fix["longitude"], fix["latitude"], values.get("throttle_percent"),
+                                        values.get("brake_percent"), separated, tick,
+                                        self.pedal_clock.fix_seconds if stamp else None))
+                self.last_map_point = self.map_points[-1]
+                self.last_valid_arrival = now
+                self.map_break = False
+                self.sync_status, self.match_offset = status, offset
+
+    def receive_adc(self, frame, now):
+        parts = frame.split(b",")
+        if len(parts) != 4 or parts[1] not in (b"B", b"T") or not parts[2].isdigit():
+            return
+        key = parts[1].decode()
+        tick = int(parts[2])
+        if tick >= MOD or (key == "B" and self.brake_disconnected):
+            return
+        try:
+            counts = None if parts[3] == b"ERR" else int(parts[3])
+        except ValueError:
+            return
+        if counts is not None and not -32768 <= counts <= 32767:
+            return
+        with self.lock:
+            if key == "T":
+                display = self.sensor_value(counts)
+                pct = display if self.calibration else None
+            else:
+                volts = None if counts is None else counts * 6.144 / 32768
+                display = pct = self.brake_calibration.percent(volts)
+            seconds = self.pedal_clock.add(key, tick, pct)
+            if seconds is None:
+                return
+            history = self.history if key == "T" else self.brake_history
+            if history and history[-1][0] is not None and seconds - history[-1][0] > 0.1:
+                history.append((None, None))
+            history.append((seconds, display))
+            if key == "T":
+                self.counts, self.sensor_time = counts, now
+            else:
+                self.brake_voltage, self.brake_time, self.brake_seen = volts, now, True
+                self.brake_status = "" if pct is not None else "Brake ADC unavailable or outside range"
+            self.revision += 1
+
+    def map_snapshot(self):
+        with self.lock:
+            sample_age = self.lap.sample_age(time.monotonic())
+            fresh = self.position is not None and sample_age is not None and sample_age <= GPS_TIMEOUT
+            rates = [self.pedal_clock.rate(k) for k in ("T", "B")]
+            duration = elapsed(self.fix_times[-1], self.fix_times[0]) if self.fix_times else 0
+            gps_rate = (len(self.fix_times) - 1) * 1000 / duration if duration > 0 else None
+            detail = self.sync_status
+            if self.match_offset is not None:
+                detail += f" · max pedal offset {self.match_offset} ms"
+            for name, rate in zip(("Throttle", "Brake", "GPS"), [*rates, gps_rate]):
+                if rate is not None:
+                    detail += f" · {name} {rate:.1f} Hz"
+            age = time.monotonic() - self.last_valid_arrival if self.last_valid_arrival is not None else None
+            points = list(self.map_points)
+            if not points and self.last_map_point is not None:
+                points.append(self.last_map_point)
+            return points, fresh, detail, self.generation, age
 
     def receive_throttle(self, frame, now):
         sensor = THROTTLE_FRAME.fullmatch(frame)

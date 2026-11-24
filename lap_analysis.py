@@ -311,7 +311,13 @@ class LapAnalysis:
 
 
 def input_mode(sample):
-    throttle, brake = sample.get("throttle_percent"), sample.get("brake_bar")
+    throttle = sample.get("throttle_percent")
+    if "brake_percent" in sample:
+        brake = sample["brake_percent"]
+        if not is_number(throttle) or not is_number(brake):
+            return "unknown"
+        return "brake" if brake > 5 else "throttle" if throttle > 5 else "coast"
+    brake = sample.get("brake_bar")
     if not is_number(throttle) or not 0 <= throttle <= 100 or not is_number(brake) or not 0 <= brake <= 100:
         return "unknown"
     return "brake" if brake > 1 else "throttle" if throttle > 5 else "coast"
